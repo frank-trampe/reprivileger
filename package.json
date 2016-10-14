@@ -1,0 +1,29 @@
+{
+  "name": "reprivileger",
+  "version": "1.0.306",
+  "description": "The Reprivileger makes it possible to enforce transitive permissions on a Feathers service.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": {
+    "name": "Frank Kemoll Trampe"
+  },
+  "license": "AGPL",
+  "dependencies": {
+    "path": "*",
+    "compression": "*",
+    "cors": "*",
+    "body-parser": "*",
+    "promise": "*",
+    "express": "*",
+    "rwlock": "*"
+  },
+  "engines": {
+    "node": "*"
+  },
+  "readme": "ERROR: No README data found!",
+  "_id": "reprivileger@1.0.306",
+  "_shasum": "747719dabbcc78a798de79e43fa275b0fa940e40",
+  "_from": "./reprivileger"
+}
