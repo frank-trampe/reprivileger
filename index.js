@@ -1,4 +1,4 @@
-// Copyright 2012-2018 by Frank Trampe.
+// Copyright 2012-2016 by Frank Trampe.
 // All rights reserved except as granted by an accompanying license.
 
 'use strict';
@@ -21,460 +21,9 @@ function hookTimestamp(hook) {
 	return timestamp;
 }
 
-function mergeSubmodelData(schema, data) {
-	// This takes an object containing data according to the provided model and flattens the contents of subobjects into the top-level dictionary.
-	// The operation presupposes non-conflicting names.
-	var output = {};
-	flattenHierarchy(output, null, '_', data);
-	return output;
-}
-
-function dateConvertToUTC(iv) {
-	// This converts a date with nominal values in the active time zone to one with nominal values in UTC.
-	return new Date(iv.getUTCFullYear(), iv.getUTCMonth(), iv.getUTCDate(), iv.getUTCHours(), iv.getUTCMinutes(), iv.getUTCSeconds(), iv.getUTCMilliseconds());
-}
-
-function tokenizeValidationRule(rule) {
-	// This breaks a validation rule in flat text format into an array of arrays for easier access.
-	// Each element of the return value contains an array containing the name of the subrule and, if present, the parameter.
-	var getToken = function(text, offset) {
-		// This returns the index of the next character after the token or a negative number if there is an error.
-		var toffset = offset;
-		while (toffset < text.length && text[toffset] != '|' && text[toffset] != ':') {
-			if (text[offset] == '\'') {
-				toffset++;
-				while (toffset < text.length && text[offset] != '\'') {
-					if (text[offset] == '\\' && toffset + 1 < text.length) {
-						toffset++;
-					}
-					toffset++;
-				}
-				if (toffset < text.length && text[offset] == '\'') {
-					// We found the closing quote.
-					toffset++;
-				} else if (toffset == text.length) {
-					// console.log("Missing closing quote.");
-					return -1;
-				}
-			} else {
-				toffset++;
-			}
-		}
-		// console.log("Token: ", offset, toffset, ".");
-		return toffset;
-	};
-	var getRule = function(text, offset) {
-		var rv = [];
-		var name_start = offset;
-		var name_end = getToken(text, name_start);
-		if (name_end > name_start) {
-			rv.push(text.slice(name_start, name_end));
-			if (name_end < text.length && text[name_end] == ':') {
-				var value_start = name_end + 1;
-				var value_end = getToken(text, value_start);
-				if (value_end > value_start) {
-					rv.push(text.slice(value_start, value_end));
-				}
-				return [value_end, rv];
-			}
-		}
-		return [name_end, rv];
-	};
-	var tokenize = function(text) {
-		var offset = 0;
-		var rules = [];
-		var tmpv;
-		while (offset < text.length) {
-			tmpv = getRule(text, offset);
-			offset = tmpv[0];
-			if (tmpv[1].length > 0) rules.push(tmpv[1]);
-			if (offset < text.length) {
-				if (text[offset] == '|') {
-					offset++;
-				} else {
-					offset = text.length;
-				}
-			}
-		}
-		return rules;
-	};
-	return tokenize(rule);
-}
-
-function validateText(rule, data) {
-	// This validates the text in data according to the rule.
-	// The rule is a string.
-	// The rule contains subrules.
-	// Each subrule has a name.
-	// It may also have a single parameter, separated from the name by a colon.
-	// The pipe operator separates subrules.
-	// In spite of that, the logic is of the AND variety.
-	// The check passes if the data meet all subrules.
-	// The max option checks that the length of the data is under that specified by the parameter.
-	// The alpha_num option checks that all characters in data match /^[A-Za-z0-9]*$/.
-	// The alpha_dash option checks that all characters in data match /^[A-Za-z0-9_-]*$/.
-	// The alpha_slash option checks that all characters in data match /^[A-Za-z0-9\/\.:_-]*$/.
-	// The us_date option checks that all characters in data match /^[A-Za-z0-9_-]*$/.
-	// The required option checks that data is supplied. A blank string passes this check.
-	// Subrules are rules, perhaps, but it seemed important to make a distinction between the input rule string and the specific rules (thus subrules).
-	var rules = tokenizeValidationRule(rule);
-	// console.log("Rules:", rules, ".");
-	var rv = 0;
-	if (data == null) {
-		var rule_required = 0;
-		rules.forEach(function (currentValue, index, array) {
-			if (currentValue.length >= 1 && currentValue[0] == "required") {
-				rule_required = 1;
-			}
-		});
-		if (rule_required) return -1;
-		return 0;
-	}
-	if (typeof('data') == 'string') {
-		rules.forEach(function (currentValue, index, array) {
-			if (currentValue.length >= 2 && currentValue[0] == "max") {
-				// console.log("max", currentValue[1]);
-				if (data.length > currentValue[1]) {
-					rv = -1;
-					// console.log("Fail max rule.");
-				}
-			} else if (currentValue.length >= 2 && currentValue[0] == "min") {
-				// console.log("max", currentValue[1]);
-				if (data.length < currentValue[1]) {
-					rv = -1;
-					// console.log("Fail max rule.");
-				}
-			} else if (currentValue.length >= 1 && currentValue[0] == "alpha_num") {
-				var alpha_num_pattern = /^[A-Za-z0-9]*$/;
-				var alpha_num_matches = data.match(alpha_num_pattern);
-				if (alpha_num_matches == null || alpha_num_matches.length == 0) {
-					rv = -1;
-					// console.log("Fail alpha_num rule.");
-					// console.log("Matches: ", alpha_num_matches, ".");
-				}
-			} else if (currentValue.length >= 1 && currentValue[0] == "alpha_dash") {
-				var alpha_dash_pattern = /^[A-Za-z0-9_-]*$/;
-				var alpha_dash_matches = data.match(alpha_dash_pattern);
-				if (alpha_dash_matches == null || alpha_dash_matches.length == 0) {
-					rv = -1;
-					// console.log("Fail alpha_dash rule.");
-					// console.log("Matches: ", alpha_dash_matches, ".");
-				}
-			} else if (currentValue.length >= 1 && currentValue[0] == "alpha_dash_space") {
-				var alpha_dash_pattern = /^[A-Za-z0-9 _-]*$/;
-				var alpha_dash_matches = data.match(alpha_dash_pattern);
-				if (alpha_dash_matches == null || alpha_dash_matches.length == 0) {
-					rv = -1;
-					// console.log("Fail alpha_dash rule.");
-					// console.log("Matches: ", alpha_dash_matches, ".");
-				}
-			} else if (currentValue.length >= 1 && currentValue[0] == "alpha_slash") {
-				var alpha_slash_pattern = /^[A-Za-z0-9\/\.:_-]*$/;
-				var alpha_slash_matches = data.match(alpha_slash_pattern);
-				if (alpha_slash_matches == null || alpha_slash_matches.length == 0) {
-					rv = -1;
-					// console.log("Fail alpha_slash rule.");
-					// console.log("Matches: ", alpha_slash_matches, ".");
-				}
-			} else if (currentValue.length >= 1 && currentValue[0] == "alpha_slash_space") {
-				var alpha_slash_space_pattern = /^[A-Za-z0-9\/\.: _-]*$/;
-				var alpha_slash_space_matches = data.match(alpha_slash_space_pattern);
-				if (alpha_slash_space_matches == null || alpha_slash_space_matches.length == 0) {
-					rv = -1;
-					// console.log("Fail alpha_slash space_rule.");
-					// console.log("Matches: ", alpha_slash_space_matches, ".");
-				}
-			} else if (currentValue.length >= 1 && currentValue[0] == "us_date") {
-				var us_date_pattern = /^[0-9]{1,2}\/[0-9]{1,2}\/[0-9]+$/;
-				var us_date_matches = data.match(us_date_pattern);
-				if (us_date_matches == null || us_date_matches.length == 0) {
-					rv = -1;
-					// console.log("Fail us_date rule.");
-					// console.log("Matches: ", us_date_matches, ".");
-				}
-			} else if (currentValue.length >= 1 && currentValue[0] == "required") {
-				if (data == null || data == undefined) rv = -1;
-			}
-		});
-	} else if (typeof('data') == 'number') {
-		rules.forEach(function (currentValue, index, array) {
-			if (currentValue.length >= 2 && currentValue[0] == "max") {
-				// console.log("max", currentValue[1]);
-				if (data > currentValue[1]) {
-					rv = -1;
-					// console.log("Fail max rule.");
-				}
-			} else if (currentValue.length >= 2 && currentValue[0] == "min") {
-				// console.log("max", currentValue[1]);
-				if (data < currentValue[1]) {
-					rv = -1;
-					// console.log("Fail max rule.");
-				}
-			} else if (currentValue.length >= 2 && currentValue[0] == "step") {
-				if (data % currentValue[1] != 0){
-					rv = -1;
-					// console.log("Fail step rule.");
-				}
-			}
-		});
-	} else {
-		rv = -1;
-	}
-	return rv;
-}
-
-function checkTypesNested(schema, data, exclusive, connections, target_user, dramatic, operation, original, overlay_only, overrides) {
-	// This is complementary to the validator.
-	// This function checks all fields in data and rejects if it contains any typed differently from the schema. If the exclusive flag is set, this function also rejects the input if it contains any field absent from the schema.
-	// dramatic indicates whether to fail loudly (instead of just returning -1).
-	// operation indicates the type of data operation for which the data is intended.
-	// original includes the original record.
-	// overlay_only indicates that only the overlay data are to be updated.
-	var extraChecks = [];
-	// TODO: switch to let.
-	var security = null;
-	if (this && 'models' in this && 'app' in this)
-		security = this;
-	if (!('fields' in schema)) return Promise.reject("Called without fields.");
-	var sfields = schema.fields;
-	// console.log("Type check.");
-	// console.log(data);
-	for (var pkey in data) {
-		if (pkey in sfields) {
-			if (
-					(
-						('type' in sfields[pkey] &&
-							(typeof(data[pkey]) != sfields[pkey].type ||
-								('instanceof' in sfields[pkey] && !(data[pkey] instanceof sfields[pkey]['instanceof']))
-							)
-						) ||
-						(
-							(
-								('submodel' in sfields[pkey] && sfields[pkey]['submodel'] != null) ||
-								('submodel_inline' in sfields[pkey] && sfields[pkey]['submodel_inline'] != null)
-							) &&
-							(data[pkey] == null || !(data[pkey] instanceof Object))
-						)
-					) &&
-					!('allownull' in sfields[pkey] && sfields[pkey]['allownull'] && data[pkey] == null) &&
-					!('allow_null' in sfields[pkey] && sfields[pkey]['allow_null'] && data[pkey] == null)
-				) {
-				// Type mismatch.
-				if (dramatic) {
-					// console.log("Attempting to write a mismatched type for", pkey, ".");
-					// console.log("Have", typeof(data[pkey]), ", want", sfields[pkey].type, ".");
-					return Promise.reject(new Error("Attempting to write a mismatched type for " + pkey + "."));
-				} else {
-					// console.log("Attempting to write a mismatched type for", pkey, ".");
-					// console.log("Have", typeof(data[pkey]), ", want", sfields[pkey].type, ".");
-					return Promise.resolve(-1);
-				}
-			} else if (('is_user_writable' in sfields[pkey] && sfields[pkey].is_user_writable == 0) ||
-					('is_user_writable' in overrides && overrides.is_user_writable == 0)) {
-				// Unwritable field.
-				if (dramatic) {
-					// console.log("Attempting to write field", pkey, ", which is not writable.");
-					return Promise.reject(new Error("Attempting to write to unwritable field " + pkey + "."));
-				} else {
-					// console.log("Attempting to write to an unwritable field.");
-					return Promise.resolve(-1);
-				}
-			} else if (security &&
-					((('administrator_only' in sfields[pkey] && sfields[pkey].administrator_only == 1) ||
-					('administrator_only' in overrides && overrides.administrator_only == 1)) &&
-					target_user != null &&
-					(operation == 'patch' ||
-					(operation == 'update' && (original == null || !(pkey in original) || data[pkey] != original[pkey])) ||
-					(operation == 'create' && (!('default' in sfields[pkey]) || data[pkey] != sfields[pkey].default_value))))
-					) {
-				// Unwritable field for non-administrators.
-				extraChecks.push(
-					security.userIsAdministrator(target_user).then(
-						function (is_administrator) {
-							if (!(is_administrator)) {
-								if (dramatic) {
-									return Promise.reject(new Error("Attempting to write to administrator-only field" + pkey + "."));
-								} else {
-									// console.log("Attempting to write to an unwritable field.");
-									return Promise.resolve(-1);
-								}
-							}
-						}, function (err) { return Promise.reject(err); }
-					)
-				);
-			} else if ((('immutable' in sfields[pkey] && sfields[pkey].immutable == 1) ||
-					('immutable' in overrides && overrides.immutable == 1)) &&
-					// target_user != null &&
-					((operation == 'patch' && original && pkey in original && original[pkey] != null) ||
-					(operation == 'update' && original && pkey in original && original[pkey] != null))) {
-				// Immutable field.
-				return Promise.reject(new Error("Attempting to change an immutable field " + pkey + "."));
-			} else if (('computed' in sfields[pkey] && sfields[pkey].computed == 1) ||
-					('computed' in overrides && overrides.computed == 0)) {
-				// Unwritable field.
-				if (dramatic) {
-					return Promise.reject(new Error("Attempting to write to computed (virtual) field " + pkey + "."));
-				} else {
-					// console.log("Attempting to write to a computed (virtual) field.");
-					return Promise.resolve(-1);
-				}
-			} else if (('label' in sfields[pkey] && sfields[pkey].label == 1) ||
-					('label' in overrides && overrides.label == 0)) {
-				// Unwritable field.
-				if (dramatic) {
-					return Promise.reject(new Error("Attempting to write to label field " + pkey + "."));
-				} else {
-					// console.log("Attempting to write to a computed (virtual) field.");
-					return Promise.resolve(-1);
-				}
-			} else if ('submodel' in sfields[pkey] || 'submodel_inline' in sfields[pkey]) {
-				var subschema = {};
-				if ('submodel_inline' in sfields[pkey]) {
-					subschema = sfields[pkey].submodel_inline;
-				} else if ('submodel' in sfields[pkey]) {
-					if (security && sfields[pkey].submodel in security.models) {
-						subschema = security.models[sfields[pkey].submodel];
-					} else {
-						if (dramatic) {
-							return Promise.reject(new Error("Bad model reference."));
-						} else {
-							console.log("Bad model reference.");
-							return Promise.resolve(-1);
-						}
-					}
-				}
-				// Note that submodel and target_class are incompatible options for obvious reasons.
-				if ('fields' in subschema) {
-					var nest_overrides = {};
-					var ttt;
-					// Copy the overrides.
-					for (ttt in overrides) { nest_overrides[ttt] = overrides[ttt]; }
-					// If there is no override for is_user_writable, use the value specified in the sfields.
-					if (!('is_user_writable' in overrides) && ('is_user_writable' in sfields[pkey])) {
-						nest_overrides['is_user_writable'] = sfields[pkey]['is_user_writable'];
-					}
-					if (!('administrator_only' in overrides) && ('administrator_only' in sfields[pkey])) {
-						nest_overrides['administrator_only'] = sfields[pkey]['administrator_only'];
-					}
-					if (!('computed' in overrides) && ('computed' in sfields[pkey])) {
-						nest_overrides['computed'] = sfields[pkey]['computed'];
-					}
-					if (!('label' in overrides) && ('label' in sfields[pkey])) {
-						nest_overrides['label'] = sfields[pkey]['label'];
-					}
-					if (!('overlay' in overrides) && ('overlay' in sfields[pkey])) {
-						nest_overrides['overlay'] = sfields[pkey]['overlay'];
-					}
-					if (data[pkey] instanceof Object && data[pkey] != null) {
-						if (security)
-							extraChecks.push(security.checkTypesNested(subschema, data[pkey], exclusive, connections, target_user, dramatic, operation, ((original != null && pkey in original) ? original[pkey] : null), overlay_only, overrides));
-						else
-							extraChecks.push(checkTypesNested(subschema, data[pkey], exclusive, connections, target_user, dramatic, operation, ((original != null && pkey in original) ? original[pkey] : null), overlay_only, overrides));
-					}
-				} else {
-					if (dramatic) {
-						return Promise.reject(new Error("The model lacks a field specification."));
-					} else {
-						console.log("The model lacks a field specification.");
-						return Promise.resolve(-1);
-					}
-				}
-			} else if (security && 'target_class' in sfields[pkey]) {
-				// If we are checking authority or references, we chain another promise after the reference check.
-				var tmparray = [pkey];
-				tmparray.forEach(function (currentValue, index, array) {
-					var pkk = currentValue;
-					// console.log(pkk, "has target_class", sfields[pkk]['target_class'], ".");
-					// If the sfields specify target_authority, we check (later) that the target_user (if supplied to this function) can access the pointed record.
-					var check_authority = ('target_authority' in sfields[pkk] && target_user != null && target_user != undefined);
-					// If the sfields specify checking for recursive references via a field, we check that (later).
-					var check_recursion = ('recursive_reference_check' in sfields[pkk] && sfields[pkk]['recursive_reference_check'] > 0);
-					var tname = security.id_name;
-					var refquery = {};
-					refquery[tname] = data[pkk];
-					// console.log("Reference query:", refquery, "."); 
-					extraChecks.push(security.app.service(sfields[pkk]['target_class']).find({query: refquery}).then(function (resfind) {
-						// console.log("Reference check result:", resfind['data'], resfind['data'].length, ".");
-						// console.log("Returning", {kname: pkk, result: ((resfind['data'].length > 0) ? 0 : -1)}, ".");
-						return (('data' in resfind && resfind['data'].length > 0) ? 0 :
-								(dramatic ? Promise.reject(new Error("Missing reference target.")) : -1));
-					}, function(err) { if (dramatic) { return Promise.reject(err); } else { return -1; }}).then(function (fresult) {
-						if (fresult == 0) {
-							var mchecks = [];
-							if (check_authority) {
-								// console.log("Checking authority for user", target_user, "on", sfields[pkk]['target_class'], data[pkk], "according to field", pkk, ".");
-								mchecks.push(security.accessLevelSlowWithUser(target_user, sfields[pkk]['target_class'], data[pkk]).then(function (privlev) {
-									// console.log("Authority:", (((privlev & sfields[pkk]['target_authority']) >= sfields[pkk]['target_authority']) ? 0 : -1));
-									if (!((privlev & sfields[pkk]['target_authority']) >= sfields[pkk]['target_authority'])) {
-										// If the authority is insufficient, check whether the user is an administrator.
-										return (dramatic ? Promise.reject(new Error("Insufficient authority on target record.")) : -1);
-									}
-									return 0;
-								}, function(err) { if (dramatic) { return Promise.reject(err); } else { return -1; } }));
-							}
-							if (check_recursion) {
-								mchecks.push(security.checkRecursiveDocumentDepth(sfields[pkk]['target_class'], data[pkk], pkk, {}, null).then(function (reclev) {
-									// console.log("Depth:", ((reclev >= 0 && reclev < 0xFFFF) ? 0 : -1));
-									return ((reclev >= 0 && reclev < 0xFFFF) ? 0 : (dramatic ? Promise.reject(new Error("References too deep.")) : -1));
-								}, function(err) { if (dramatic) { return Promise.reject(err); } else { return -1; } }));
-							}
-							return Promise.all(mchecks).then(function (checkresults) {
-								var rv = 0;
-								// console.log("Authority and depth for", pkk, ":", checkresults, ".");
-								checkresults.forEach(function (currentValue, index, array) { if (currentValue < 0) rv = -1; });
-								return rv;
-							}, function (err) { return Promise.reject(err); });
-						} else {
-							// console.log("Skipping authority check and returning", fresult);
-							return fresult;
-						}
-					}, function(err) { if (dramatic) { return Promise.reject(err); } else { return -1; } }));
-				});
-			}
-		} else {
-			if (exclusive) {
-				// Undocumented field.
-				if (dramatic) {
-					return Promise.reject(new Error("Attempting to write to undocumented field."));
-				} else {
-					// console.log("Attempting to write to an undocumented field.");
-					return Promise.resolve(-1);
-				}
-			}
-		}
-	}
-	// Now we use the traditional validation (roughly equivalent to the feathers-validator but implemented internally).
-	// This runs on all schema items (including those absent from the input object) so as to be able to check for required values,
-	// except when parsing a patch or when the update is overlay-only and the field is not in the overlay.
-	for (var skey in sfields) {
-		if ('validation' in sfields[skey] && ((operation != 'patch' && !(overlay_only && !(('overlay' in overrides) ? overrides['overlay'] : ('overlay' in sfields[skey] && sfields[skey]['overlay'])))) || skey in data)) {
-			if ((('allownull' in sfields[skey] && sfields[skey]['allownull']) ||
-					('allow_null' in sfields[skey] && sfields[skey]['allow_null'])) &&
-					skey in data && data[skey] == null) {
-				// console.log("Null value allowed.");
-			} else if (validateText(sfields[skey]['validation'], ((skey in data) ? data[skey] : null)) < 0) {
-				// console.log("Validation failed on", skey, "on rule", sfields[skey]['validation'], ".");
-				if (dramatic) return Promise.reject(new Error("Validation failed on " + skey + " on rule " + sfields[skey]['validation'] + "."));
-				return Promise.resolve(-1);
-			}
-		}
-	}
-	// Unite all of the outstanding promises and return the AND composite.
-	return Promise.all(extraChecks).then(function (checkresults) {
-		// console.log(checkresults);
-		var rv = 0;
-		checkresults.forEach(function (currentValue, index, array) { if (currentValue < 0) rv = -1; });
-		// console.log("Returning a complete promise.");
-		return Promise.resolve(rv);
-	}, function (err) { return Promise.reject(err); });
-}
-
-function checkTypes(schema, data, exclusive, connections, target_user, dramatic) {
-	return checkTypesNested(schema, data, exclusive, connections, target_user, dramatic, '', null, 0, {});
-}
-
 function coerceNumericToIntegerPatch(schema, data) {
 	// This converts any text values that ought to be numbers into numbers.
+	var security = this;
 	var output = {};
 	for (var pkey in data) {
 		if (pkey in schema) {
@@ -494,7 +43,6 @@ function coerceNumericToIntegerPatch(schema, data) {
 	}
 	return output;
 }
-
 function splitPatch(schema, data) {
 	// This takes a create/patch request and breaks it into base changes and overlay changes.
 	// This runs after the type check.
@@ -512,7 +60,6 @@ function splitPatch(schema, data) {
 	}
 	return {data, baseData, overlayData};		
 }
-
 function mergePatch(baseData, overlayData) {
 	// This takes a create/patch request and breaks it into base changes and overlay changes.
 	// This runs after the type check.
@@ -526,7 +73,6 @@ function mergePatch(baseData, overlayData) {
 	}
 	return data;
 }
-
 function mergeSchemedPatch(schema, baseData, overlayData) {
 	// This takes a create/patch request and breaks it into base changes and overlay changes.
 	// This runs after the type check.
@@ -544,7 +90,6 @@ function mergeSchemedPatch(schema, baseData, overlayData) {
 	}
 	return {data, baseData, overlayData};	
 }
-
 function mergeSchemedPatchInPlace(schema, baseData, overlayData) {
 	// This takes a create/patch request and breaks it into base changes and overlay changes.
 	// This runs after the type check.
@@ -559,7 +104,6 @@ function mergeSchemedPatchInPlace(schema, baseData, overlayData) {
 	}
 	return baseData;		
 }
-
 function populateHierarchy(base, path, value) {
 	if (path.length <= 0) {
 	} else if (path.length == 1) {
@@ -570,15 +114,10 @@ function populateHierarchy(base, path, value) {
 	}
 	return 0;
 }
-
 function splitSubmodelData(schema, data) {
 	// This takes an object containing flattened data and extracts fields into subobjects according to the model.
 	// This runs before the type check.
-	var security = null;
-	if (this && 'models' in this && 'app' in this) security = this;
-	var fieldMap = null;
-	if (security) fieldMap = security.splitSubmodel(schema, '_').fields;
-	else fieldMap = splitSubmodel(schema, '_').fields;
+	var fieldMap = splitSubmodel(schema, '_').fields;
 	var output = {};
 	var ci;
 	for (ci in data) {
@@ -588,7 +127,6 @@ function splitSubmodelData(schema, data) {
 	}
 	return output;
 }
-
 function flattenHierarchy(dest, prefix, delimiter, current) {
 	if (current == null) {
 	} else if (current instanceof Object) {
@@ -601,571 +139,12 @@ function flattenHierarchy(dest, prefix, delimiter, current) {
 	}
 	return 0;
 }
-
 function mergeSubmodelData(schema, data) {
 	// This takes an object containing data according to the provided model and flattens the contents of subobjects into the top-level dictionary.
 	// The operation presupposes non-conflicting names.
 	var output = {};
 	flattenHierarchy(output, null, '_', data);
 	return output;
-}
-
-function splitSubmodel(schema, delimiter) {
-	// This generates flat names for nested entities and maps them to nested entity paths.
-	// Like {'address_street_address': ['address', 'street_address']}.
-	// This takes just the field map for schema, not the full schema structure.
-	var security = null;
-	if (this && 'models' in this && 'app' in this) {
-		security = this;
-	}
-	var output = {};
-	var si;
-	if ('fields' in schema) {
-		for (si in schema.fields) {
-			if ('submodel' in schema.fields[si] || 'submodel_inline' in schema.fields[si]) {
-				var tschema = {};
-				if ('submodel_inline' in schema.fields[si] && 'fields' in schema.fields[si].submodel_inline) {
-					if (security)
-						tschema = security.splitSubmodel(schema.fields[si]['submodel_inline'], delimiter);
-					else
-						tschema = splitSubmodel(schema.fields[si]['submodel_inline'], delimiter);
-				} else if (security && 'submodel' in schema.fields[si] && 'fields' in security.models[schema.fields[si].submodel]) {
-					tschema = security.splitSubmodel(security.models[schema.fields[si].submodel], delimiter);
-				}
-				var tsi;
-				for (tsi in tschema.fields) {
-					// Construct the flat name by joining the incoming name to the name of the current key.
-					// And construct the path by joining the incoming array to an array containing the name of the current key.
-					if ((si + delimiter + tsi) in output) console.log("Schema conflict.");
-					else output[si + delimiter + tsi] = ([si]).concat(tschema.fields[tsi]);
-				}
-			} else {
-				if (si in output) console.log("Schema conflict.");
-				else output[si] = [si];
-			}
-		}
-	}
-	return {fields: output};
-}
-
-function convertSubmodelFlattenByMap(schema, mapping) {
-	// This takes an inlined schema only.
-	// This takes the output from splitSubmodel as mapping.
-	// TODO: Rebase column names in easyCompute properties.
-	var output = {fields: {}};
-	var entry;
-	for (entry in mapping.fields) {
-		var current_node = {'submodel_inline': schema};
-		var current_node_name;
-		var err = 0;
-		mapping.fields[entry].forEach(function (current_node_name, mei, mea) {
-			if ('submodel_inline' in current_node &&
-					'fields' in current_node['submodel_inline'] &&
-					current_node_name in current_node['submodel_inline']['fields']) {
-				current_node = current_node['submodel_inline']['fields'][current_node_name];
-			} else {
-				err = 1;
-			}
-		});
-		if (!err) output.fields[entry] = current_node;
-	}
-	return output;
-}
-
-function defaultValueDataFromSchema(schema, optionals) {
-	// This generates a record containing default or space-filler values.
-	// If there are no relations and no strings that must be longer than zero characters,
-	// it might give a record that would pass the type check.
-	var security = null;
-	if (this && 'models' in this && 'app' in this) security = this;
-	var output = {};
-	var si;
-	for (si in schema.fields) {
-		if (security && 'submodel' in schema.fields[si]) {
-				output[si] = defaultValueDataFromSchema(security.models[schema.fields[si].submodel], optionals);
-		} else if ('submodel_inline' in schema.fields[si]) {
-			if (security)
-				output[si] = security.defaultValueDataFromSchema(schema[si].submodel_inline, 1);
-			else
-				output[si] = defaultValueDataFromSchema(schema[si].submodel_inline, 1);
-		} else if ('type' in schema.fields[si] &&
-				(!('is_primary_key' in schema.fields[si] && schema.fields[si].is_primary_key)) &&
-				(!('target_class' in schema.fields[si] && schema.fields[si].target_class.length > 0)) &&
-				(!('is_user_writable' in schema.fields[si] && !(schema.fields[si].is_user_writable))) &&
-				(!('computed' in schema.fields[si] && schema.fields[si].computed))) {
-			// We need to figure out the rules for the data to be generated.
-			var vmin = 0;
-			var vmax = 0;
-			var vrequired = 0;
-			var vrules = [];
-			if ('validation' in schema.fields[si]) vrules = tokenizeValidationRule(schema.fields[si].validation);
-			vrules.forEach(function (rule, r_ind, r_arr) {
-				if (rule.length > 1) {
-					if (rule[0] == 'min') {
-						vmin = parseInt(rule[1]);
-					} else if (rule[0] == 'max') {
-						vmax = parseInt(rule[1]);
-					}
-				} else if (rule.length > 0) {
-					if (rule[0] == 'required') {
-						vrequired = 1;
-					}
-				}
-			});
-			// Now we generate data according to those rules.
-			if (vrequired || optionals) {
-				if (schema.fields[si].type == 'string') {
-					var scnt = 0;
-					var sspace = "";
-					while (scnt < vmin) {
-						sspace += (scnt % 10).toString();
-						scnt++;
-					}
-					output[si] = sspace;
-				} else if (schema.fields[si].type == 'number') {
-					output[si] = vmin;
-				}
-			}
-		}
-	}
-	return output;
-}
-
-function dictDiff(i0, i1, proportional) {
-	var output = {};
-	for (fn in i0) {
-		if (fn in i1) {
-			if (proportional) {
-				if (i0[fn] > 0) {
-					output[fn] = (i1[fn] - i0[fn]) / i0[fn];
-				} else {
-					output[fn] = NaN;
-				}
-			} else {
-				output[fn] = (i1[fn] - i0[fn]);
-			}
-		}
-	}
-	return output;
-}
-
-function schemaGetQuantitativeNames(schema, inferQuantityFields, ignoreComputedFields) {
-	var names = [];
-	var fname;
-	for (fname in schema.fields) {
-		var field = schema.fields[fname];
-		if ('type' in field && field.type == 'number' &&
-				(('quantitative' in field && field.quantitative) ||
-				(inferQuantityFields &&
-				!('is_primary_key' in field && field.is_primary_key) &&
-				!('target_class' in field && field.target_class))) &&
-				!('label' in field && field.label) &&
-				!(ignoreComputedFields && 'computed' in field && field.computed)) {
-			names.push(fname);
-		}
-	};
-	return names;
-}
-
-function vectorTallyWithSchemaArrays(schema, data, names, invertFirst) {
-	// This expects flat schema (with no submodels).
-	// Data is an array of records.
-	// invertFirst reverses the sign of the first row, allowing this function to be used for differencing.
-	// Make space for the total and the count of the input values for each column.
-	var value_totals = new Array(names.length);
-	value_totals.fill(0);
-	var item_totals = new Array(names.length);
-	item_totals.fill(0);
-	// Add the value to the one vector and increment the value count in the other.
-	// TODO: Consider using parallel.js here.
-	data.forEach(function (row, r_ind, r_arr) {
-		names.forEach(function (n, n_ind, n_arr) {
-			if (n in row && typeof(row[n]) == 'number') {
-				if (invertFirst && r_ind == 0) value_totals[n_ind] -= row[n];
-				else value_totals[n_ind] += row[n];
-				item_totals[n_ind] += 1;
-			}
-		});
-	});
-	return {names: names, totals: value_totals, counts: item_totals};
-}
-
-function vectorAverageWithSchemaByName(schema, data, names) {
-	// console.log("Names.");
-	// console.log(names);
-	var iv = vectorTallyWithSchemaArrays(schema, data, names, 0);
-	// console.log("Values.");
-	// console.log(iv);
-	// var output_a = new Array(iv.names.length);
-	var output_d = {};
-	iv.names.forEach( function (n, ind, n_arr) {
-		if (iv.counts[ind] > 0) {
-			// output_a[ind] = iv.totals[ind] / iv.counts[ind];
-			output_d[n] = iv.totals[ind] / iv.counts[ind];
-		} else {
-			// output_a[ind] = null;
-			output_d[n] = null;
-		}
-	});
-	return output_d;
-}
-
-function padZero(val, padsize) {
-	var tv = val.toString();
-	var zcount = padsize - tv.length;
-	var tp = "";
-	var ocount = 0;
-	while (ocount < zcount) {
-		tp += "0";
-		ocount++;
-	}
-	return tp + tv;
-}
-
-function generateFormCrude(document, ischema, includeAll, includeVisible, includeLabelled, preferExplanations, breaks) {
-	var fschema_map = splitSubmodel(ischema, "_");
-	var fschema = convertSubmodelFlattenByMap(ischema, fschema_map);
-	var output = [];
-	var fl = fschema.fields;
-	var fname;
-	for (fname in fl) {
-		var fe = fl[fname];
-		if ((includeLabelled  &&
-				(('human_name' in fe && fe['human_name']) ||
-				('special_explanation' in fe && fe['human_name']) ||
-				('label' in fe && fe['label']))) ||
-				(includeVisible && 'visible' in fe && fe['visible']) ||
-				includeAll) {
-			// We determine that this field somehow qualifies to appear on the form.
-			var tl = null;
-			if ('label' in fe && fe['label']) {
-				// If this is just a stand-alone label, it is a p tag.
-				if ('form_tag' in fe && fe['form_tag'])
-					tl = document.createElement(fe['form_tag']);
-				else
-					tl = document.createElement("p");
-				tl.setAttribute("name", fname);
-			} else {
-				// If we are putting a label on an input field, it is a label tag.
-				tl = document.createElement("label");
-			}
-			if (preferExplanations && 'special_explanation' in fe &&
-					fe['special_explanation']) {
-				var tt = document.createTextNode(fe['special_explanation']);
-				tl.appendChild(tt);
-			} else if ('human_name' in fe && fe['human_name']) {
-				var tt = document.createTextNode(fe['human_name']);
-				tl.appendChild(tt);
-			}
-			if (breaks) {
-				var tb = document.createElement("br");
-				tl.appendChild(tb);
-			}
-			if (!('label' in fe && fe['label'])) {
-				if ('type' in fe && fe['type']) {
-					// Parse the validation rules, if present.
-					var tmin = null;
-					var tmax = null;
-					var treq = null;
-					var tstep = null;
-					var twrite = null;
-					var tcomputed = null;
-					if ('validation' in fe) {
-						var rules = tokenizeValidationRule(fe['validation']);
-						rules.forEach(function(rval, r_ind, r_arr) {
-							if (rval.length > 1) {
-								if (rval[0] == 'min') {
-									tmin = rval[1];
-								} else if (rval[0] == 'max') {
-									tmax = rval[1];
-								} else if (rval[0] == 'step') {
-									tstep = rval[1];
-								}
-							} else if (rval.length > 0) {
-								if (rval[0] == 'required') {
-									treq = 1;
-								}
-							}
-						});
-					}
-					if ('computed' in fe) {
-						if (fe['computed']) {
-							tcomputed = 1;
-						} else {
-							tcomputed = 0;
-						}
-					}
-					if ('is_user_writable' in fe) {
-						if (fe['is_user_writable']) {
-							twrite = 1;
-						} else {
-							twrite = 0;
-						}
-					}
-					var tf = null;
-					if (fe['type'] == 'object') {
-						// We only accept dates right now.
-						if ('stype' in fe && fe['stype'] == 'date') {
-							// Insert a date selector.
-							tf = document.createElement("input");
-							tf.setAttribute("type", "date");
-						}
-					} else if (fe['type'] == 'number') {
-						tf = document.createElement("input");
-						tf.setAttribute("type", "number");
-						if (tmin != null)
-							tf.setAttribute("min", tmin.toString());
-						if (tmax != null)
-							tf.setAttribute("max", tmax.toString());
-						if (tstep != null)
-							tf.setAttribute("step", tstep.toString());
-					} else if (fe['type'] == 'string') {
-						tf = document.createElement("input");
-						tf.setAttribute("type", "number");
-						if (tmin != null)
-							tf.setAttribute("min", tmin.toString());
-						if (tmax != null)
-							tf.setAttribute("max", tmax.toString());
-					}
-					if (tf != null) {
-						if (treq) tf.setAttribute("required", 1);
-						tf.setAttribute("name", fname);
-						if ((twrite != null && !twrite) ||
-								(tcomputed != null && tcomputed)) {
-							tf.setAttribute("readonly", "1");
-						}
-						tl.appendChild(tf);
-						if (breaks) {
-							var tb = document.createElement("br");
-							tl.appendChild(tb);
-						}
-					}
-				}
-			}
-			output.push(tl);
-		}
-	}
-	return output;
-}
-
-function numberCheck(str) {
-	if (typeof(str) == 'number') return 1;
-	if (str !== null && str.length > 0 && !isNaN(str))
-		return 1;
-	return 0;
-}
-
-function extractFormData(schema, fschema, tform) {
-	// This requires flattened schema and normal schema.
-	// The caching improves performance.
-	var tfs = fschema.fields;
-	var fname;
-	var tdata = {};
-	for (fname in tfs) {
-		var tf = tfs[fname];
-		if (!('label' in tf && tf['label']) && !('computed' in tf && tf['computed']) &&
-				!('is_user_writable' in tf && !tf['is_user_writable'])) {
-			if (fname in tform.elements && 'value' in tform.elements[fname]) {
-				var tv = tform.elements[fname].value;
-				var tvc = tv;
-				// console.log(tf);
-				if ('type' in tf) {
-					if (tf.type == 'number' && typeof(tv) != 'number') {
-						if (numberCheck(tv))
-							tvc = new Number(tv);
-						else
-							tvc = null;
-					}
-				}
-				if (tvc != null)
-					tdata[fname] = tvc;
-			}
-		}
-	}
-	return splitSubmodelData(schema, tdata);
-}
-
-function filterFormData(schema, data) {
-	// This filters out unwritable fields.
-	// If submodel is set, this will try to find schema in this, so be careful.
-	if (data == null) return null;
-	var security = null;
-	var tfs = schema.fields;
-	var fname;
-	var tdata = {};
-	for (fname in tfs) {
-		var tf = tfs[fname];
-		if (!('label' in tf && tf['label']) && !('computed' in tf && tf['computed']) &&
-				!('is_user_writable' in tf && !tf['is_user_writable'])) {
-			if (fname in data) {
-				if (security && 'models' in security && 'app' in security && 'submodel' in tf && tf['submodel'] != null) {
-					if (tf['submodel'] in security.models) {
-						tdata[fname] = filterFormData(security.models[tf['submodel']], data[fname]);
-					}
-				} else if ('submodel_inline' in tf && tf['submodel_inline'] != null) {
-					tdata[fname] = filterFormData(tf['submodel_inline'], data[fname]);
-				} else {
-					tdata[fname] = data[fname];
-				}
-			}
-		}
-	}
-	return tdata;
-}
-
-function vectorDifferenceWithSchemaByName(schema, data, names) {
-	var iv = vectorTallyWithSchemaArrays(schema, data, names, 1);
-	// var output_a = new Array(iv.names.length);
-	var output_d = {};
-	iv.names.forEach( function (n, ind, n_arr) {
-		if (iv.counts[ind] > 0) {
-			// output_a[ind] = iv.totals[ind] / iv.counts[ind];
-			output_d[n] = iv.totals[ind];
-		} else {
-			// output_a[ind] = null;
-			output_d[n] = null;
-		}
-	});
-	return output_d;
-}
-
-function easyCompute(schema, data, formula, allow_recursion, fallback_data) {
-	// TODO: Figure out errors.
-	if ('value' in formula) {
-		return formula['value'];
-	} else if ('column' in formula) {
-		// TODO: Add support for relative paths to submodels and supermodels.
-		if (formula['column'] in data) {
-			return data[formula['column']];
-		} else if (fallback_data && formula['column'] in fallback_data) {
-			return fallback_data[formula['column']];
-		} else if (allow_recursion && 'fields' in schema && formula['column'] in schema.fields &&
-				'computed' in schema.fields[formula['column']] &&
-				schema.fields[formula['column']]['computed'] &&
-				'easy_computation' in schema.fields[formula['column']] &&
-				schema.fields[formula['column']]['easy_computation'] != null) {
-			return easyCompute(schema, data, schema.fields[formula['column']]['easy_computation'], allow_recursion, fallback_data);
-		} else if ('fields' in schema && formula['column'] in schema.fields) {
-			// It is not a bad reference, just a missing field.
-		} else {
-			console.log("Bad reference " + formula['column'] + " in formula.");
-		}
-	} else if ('sum' in formula) {
-		var acc = 0;
-		formula['sum'].forEach(function (addend, a_ind, a_arr) {
-			acc += easyCompute(schema, data, addend, allow_recursion, fallback_data);
-		});
-		return acc;
-	} else if ('product' in formula) {
-		var acc = 1;
-		formula['product'].forEach(function (addend, a_ind, a_arr) {
-			acc *= easyCompute(schema, data, addend, allow_recursion, fallback_data);
-		});
-		return acc;
-	} else if ('pow' in formula) {
-		var pbase = easyCompute(schema, data, formula['pow'][0], allow_recursion, fallback_data);
-		var pexp = easyCompute(schema, data, formula['pow'][1], allow_recursion, fallback_data);
-		if (formula['pow'].length > 1 && (pexp >= 0 || pbase > 0)) {
-			return Math.pow(pbase, pexp);
-		}
-	}
-	return 0;
-}
-
-function coerceValues(schema, data) {
-	var security = null;
-	if (this && 'models' in this && 'app' in this) security = this;
-	var fname;
-	var output = {};
-	for (fname in schema.fields) {
-		var field = schema.fields[fname];
-		if (fname in data) {
-			if (data[fname] != null) {
-				if ('type' in field && (typeof(data[fname]) != field['type'] ||
-						('instanceof' in field && field['instanceof'] != null && !(data[fname] instanceof field['instanceof'])))) {
-					if ('instanceof' in field && field['instanceof'] != null) {
-						// console.log("instanceof conversion on " + fname + ".");
-						try {
-							output[fname] = new field['instanceof'](data[fname]);
-						} catch (err) {
-							console.log(err);
-							output[fname] = null;
-						}
-					} else {
-						// console.log("Flat type conversion on " + fname + ".");
-						try {
-							if (field['type'] == 'number') {
-								output[fname] = new Number(data[fname]);
-							} else if (field['type'] == 'string') {
-								output[fname] = new String(data[fname]);
-							} else {
-								output[fname] = null;
-							}
-						} catch (err) {
-							output[fname] = null;
-						}
-					}
-				} else {
-					// If the field is provided, we copy/process it.
-					// console.log("Type match on " + fname + ".");
-					if (security && 'submodel' in field && typeof(field['submodel']) == 'string' && field['submodel'].length > 0 &&
-							field['submodel'] in security.models) {
-						output[fname] = security.coerceValues(security.models[field['submodel']], data[fname]);
-					} else if ('submodel_inline' in field && field['submodel_inline'] instanceof Object) {
-						if (security)
-							output[fname] = security.coerceValues(field['submodel_inline'], data[fname]);
-						else
-							output[fname] = coerceValues(field['submodel_inline'], data[fname]);
-					} else {
-						output[fname] = data[fname];
-					}
-				}
-			} else {
-				// console.log("Null on " + fname + ".");
-				output[fname] = data[fname];
-			}
-		}
-	}
-	return output;		
-}
-
-function includeEasyComputedValues(schema, data) {
-	var security = null;
-	if (this && 'models' in this && 'app' in this) security = this;
-	var fname;
-	var output = {};
-	for (fname in schema.fields) {
-		var field = schema.fields[fname];
-		if ('type' in field && field.type == 'number' &&
-				'computed' in field && field.computed &&
-				'easy_computation' in field) {
-			// If the field is computed, we generate it.
-			output[fname] = easyCompute(schema, data, field['easy_computation'], 1, output);
-		} else if (fname in data) {
-			// If the field is provided, we copy/process it.
-			if (security && 'submodel' in field && typeof(field['submodel']) == 'string' && field['submodel'].length > 0 &&
-					field['submodel'] in security.models) {
-				output[fname] = security.includeEasyComputedValues(security.models[field['submodel']], data[fname]);
-			} else if ('submodel_inline' in field && field['submodel_inline'] instanceof Object) {
-				if (security)
-					output[fname] = security.includeEasyComputedValues(field['submodel_inline'], data[fname]);
-				else
-					output[fname] = includeEasyComputedValues(field['submodel_inline'], data[fname]);
-			} else {
-				output[fname] = data[fname];
-			}
-		}
-	};
-	return output;
-}
-
-function generateValidatorSchema(schema) {
-	// This converts the internal validator schema/rules to something compatible with feathers-validator.
-	var rv = {};
-	for (var tkey in schema) {
-		rv[tkey] = schema[tkey].validation;
-	}
-	return rv;
 }
 
 var security_template = {
@@ -1221,10 +200,434 @@ var security_template = {
 		// This converts a date with nominal values in the active time zone to one with nominal values in UTC.
 		return new Date(iv.getUTCFullYear(), iv.getUTCMonth(), iv.getUTCDate(), iv.getUTCHours(), iv.getUTCMinutes(), iv.getUTCSeconds(), iv.getUTCMilliseconds());
 	},
-	tokenizeValidationRule: tokenizeValidationRule,
-	validateText: validateText,
-	checkTypesNested: checkTypesNested,
-	checkTypes: checkTypes,
+	tokenizeValidationRule: function(rule) {
+		// This breaks a validation rule in flat text format into an array of arrays for easier access.
+		// Each element of the return value contains an array containing the name of the subrule and, if present, the parameter.
+		var getToken = function(text, offset) {
+			// This returns the index of the next character after the token or a negative number if there is an error.
+			var toffset = offset;
+			while (toffset < text.length && text[toffset] != '|' && text[toffset] != ':') {
+				if (text[offset] == '\'') {
+					toffset++;
+					while (toffset < text.length && text[offset] != '\'') {
+						if (text[offset] == '\\' && toffset + 1 < text.length) {
+							toffset++;
+						}
+						toffset++;
+					}
+					if (toffset < text.length && text[offset] == '\'') {
+						// We found the closing quote.
+						toffset++;
+					} else if (toffset == text.length) {
+						// console.log("Missing closing quote.");
+						return -1;
+					}
+				} else {
+					toffset++;
+				}
+			}
+			// console.log("Token: ", offset, toffset, ".");
+			return toffset;
+		};
+		var getRule = function(text, offset) {
+			var rv = [];
+			var name_start = offset;
+			var name_end = getToken(text, name_start);
+			if (name_end > name_start) {
+				rv.push(text.slice(name_start, name_end));
+				if (name_end < text.length && text[name_end] == ':') {
+					var value_start = name_end + 1;
+					var value_end = getToken(text, value_start);
+					if (value_end > value_start) {
+						rv.push(text.slice(value_start, value_end));
+					}
+					return [value_end, rv];
+				}
+			}
+			return [name_end, rv];
+		};
+		var tokenize = function(text) {
+			var offset = 0;
+			var rules = [];
+			var tmpv;
+			while (offset < text.length) {
+				tmpv = getRule(text, offset);
+				offset = tmpv[0];
+				if (tmpv[1].length > 0) rules.push(tmpv[1]);
+				if (offset < text.length) {
+					if (text[offset] == '|') {
+						offset++;
+					} else {
+						offset = text.length;
+					}
+				}
+			}
+			return rules;
+		};
+		return tokenize(rule);
+	},
+	validateText: function(rule, data) {
+		// This validates the text in data according to the rule.
+		// The rule is a string.
+		// The rule contains subrules.
+		// Each subrule has a name.
+		// It may also have a single parameter, separated from the name by a colon.
+		// The pipe operator separates subrules.
+		// In spite of that, the logic is of the AND variety.
+		// The check passes if the data meet all subrules.
+		// The max option checks that the length of the data is under that specified by the parameter.
+		// The alpha_num option checks that all characters in data match /^[A-Za-z0-9]*$/.
+		// The alpha_dash option checks that all characters in data match /^[A-Za-z0-9_-]*$/.
+		// The alpha_slash option checks that all characters in data match /^[A-Za-z0-9\/\.:_-]*$/.
+		// The us_date option checks that all characters in data match /^[A-Za-z0-9_-]*$/.
+		// The required option checks that data is supplied. A blank string passes this check.
+		// Subrules are rules, perhaps, but it seemed important to make a distinction between the input rule string and the specific rules (thus subrules).
+		var rules = this.tokenizeValidationRule(rule);
+		// console.log("Rules:", rules, ".");
+		var rv = 0;
+		if (data == null) {
+			var rule_required = 0;
+			rules.forEach(function (currentValue, index, array) {
+				if (currentValue.length >= 1 && currentValue[0] == "required") {
+					rule_required = 1;
+				}
+			});
+			if (rule_required) return -1;
+			return 0;
+		}
+		if (typeof('data') == 'string') {
+			rules.forEach(function (currentValue, index, array) {
+				if (currentValue.length >= 2 && currentValue[0] == "max") {
+					// console.log("max", currentValue[1]);
+					if (data.length > currentValue[1]) {
+						rv = -1;
+						// console.log("Fail max rule.");
+					}
+				} else if (currentValue.length >= 2 && currentValue[0] == "min") {
+					// console.log("max", currentValue[1]);
+					if (data.length < currentValue[1]) {
+						rv = -1;
+						// console.log("Fail max rule.");
+					}
+				} else if (currentValue.length >= 1 && currentValue[0] == "alpha_num") {
+					var alpha_num_pattern = /^[A-Za-z0-9]*$/;
+					var alpha_num_matches = data.match(alpha_num_pattern);
+					if (alpha_num_matches == null || alpha_num_matches.length == 0) {
+						rv = -1;
+						// console.log("Fail alpha_num rule.");
+						// console.log("Matches: ", alpha_num_matches, ".");
+					}
+				} else if (currentValue.length >= 1 && currentValue[0] == "alpha_dash") {
+					var alpha_dash_pattern = /^[A-Za-z0-9_-]*$/;
+					var alpha_dash_matches = data.match(alpha_dash_pattern);
+					if (alpha_dash_matches == null || alpha_dash_matches.length == 0) {
+						rv = -1;
+						// console.log("Fail alpha_dash rule.");
+						// console.log("Matches: ", alpha_dash_matches, ".");
+					}
+				} else if (currentValue.length >= 1 && currentValue[0] == "alpha_dash_space") {
+					var alpha_dash_pattern = /^[A-Za-z0-9 _-]*$/;
+					var alpha_dash_matches = data.match(alpha_dash_pattern);
+					if (alpha_dash_matches == null || alpha_dash_matches.length == 0) {
+						rv = -1;
+						// console.log("Fail alpha_dash rule.");
+						// console.log("Matches: ", alpha_dash_matches, ".");
+					}
+				} else if (currentValue.length >= 1 && currentValue[0] == "alpha_slash") {
+					var alpha_slash_pattern = /^[A-Za-z0-9\/\.:_-]*$/;
+					var alpha_slash_matches = data.match(alpha_slash_pattern);
+					if (alpha_slash_matches == null || alpha_slash_matches.length == 0) {
+						rv = -1;
+						// console.log("Fail alpha_slash rule.");
+						// console.log("Matches: ", alpha_slash_matches, ".");
+					}
+				} else if (currentValue.length >= 1 && currentValue[0] == "alpha_slash_space") {
+					var alpha_slash_space_pattern = /^[A-Za-z0-9\/\.: _-]*$/;
+					var alpha_slash_space_matches = data.match(alpha_slash_space_pattern);
+					if (alpha_slash_space_matches == null || alpha_slash_space_matches.length == 0) {
+						rv = -1;
+						// console.log("Fail alpha_slash space_rule.");
+						// console.log("Matches: ", alpha_slash_space_matches, ".");
+					}
+				} else if (currentValue.length >= 1 && currentValue[0] == "us_date") {
+					var us_date_pattern = /^[0-9]{1,2}\/[0-9]{1,2}\/[0-9]+$/;
+					var us_date_matches = data.match(us_date_pattern);
+					if (us_date_matches == null || us_date_matches.length == 0) {
+						rv = -1;
+						// console.log("Fail us_date rule.");
+						// console.log("Matches: ", us_date_matches, ".");
+					}
+				} else if (currentValue.length >= 1 && currentValue[0] == "required") {
+					if (data == null || data == undefined) rv = -1;
+				}
+			});
+		} else if (typeof('data') == 'number') {
+			rules.forEach(function (currentValue, index, array) {
+				if (currentValue.length >= 2 && currentValue[0] == "max") {
+					// console.log("max", currentValue[1]);
+					if (data > currentValue[1]) {
+						rv = -1;
+						// console.log("Fail max rule.");
+					}
+				} else if (currentValue.length >= 2 && currentValue[0] == "min") {
+					// console.log("max", currentValue[1]);
+					if (data < currentValue[1]) {
+						rv = -1;
+						// console.log("Fail max rule.");
+					}
+				} else if (currentValue.length >= 2 && currentValue[0] == "step") {
+					if (data % currentValue[1] != 0){
+						rv = -1;
+						// console.log("Fail step rule.");
+					}
+				}
+			});
+		} else {
+			rv = -1;
+		}
+		return rv;
+	},
+	checkTypesNested: function(schema, data, exclusive, connections, target_user, dramatic, operation, original, overlay_only, overrides) {
+		// This is complementary to the validator.
+		// This function checks all fields in data and rejects if it contains any typed differently from the schema. If the exclusive flag is set, this function also rejects the input if it contains any field absent from the schema.
+		// dramatic indicates whether to fail loudly (instead of just returning -1).
+		// operation indicates the type of data operation for which the data is intended.
+		// original includes the original record.
+		// overlay_only indicates that only the overlay data are to be updated.
+		var extraChecks = [];
+		// TODO: switch to let.
+		var security = this;
+		if (!('fields' in schema)) return Promise.reject("Called without fields.");
+		var sfields = schema.fields;
+		// console.log("Type check.");
+		// console.log(data);
+		for (var pkey in data) {
+			if (pkey in sfields) {
+				if (
+						(
+							('type' in sfields[pkey] &&
+								(typeof(data[pkey]) != sfields[pkey].type ||
+									('instanceof' in sfields[pkey] && !(data[pkey] instanceof sfields[pkey]['instanceof']))
+								)
+							) ||
+							(
+								(
+									('submodel' in sfields[pkey] && sfields[pkey]['submodel'] != null) ||
+									('submodel_inline' in sfields[pkey] && sfields[pkey]['submodel_inline'] != null)
+								) &&
+								(data[pkey] == null || !(data[pkey] instanceof Object))
+							)
+						) &&
+						!('allownull' in sfields[pkey] && sfields[pkey]['allownull'] && data[pkey] == null) &&
+						!('allow_null' in sfields[pkey] && sfields[pkey]['allow_null'] && data[pkey] == null)
+					) {
+					// Type mismatch.
+					if (dramatic) {
+						// console.log("Attempting to write a mismatched type for", pkey, ".");
+						// console.log("Have", typeof(data[pkey]), ", want", sfields[pkey].type, ".");
+						return Promise.reject(new Error("Attempting to write a mismatched type for " + pkey + "."));
+					} else {
+						// console.log("Attempting to write a mismatched type for", pkey, ".");
+						// console.log("Have", typeof(data[pkey]), ", want", sfields[pkey].type, ".");
+						return Promise.resolve(-1);
+					}
+				} else if (('is_user_writable' in sfields[pkey] && sfields[pkey].is_user_writable == 0) ||
+						('is_user_writable' in overrides && overrides.is_user_writable == 0)) {
+					// Unwritable field.
+					if (dramatic) {
+						// console.log("Attempting to write field", pkey, ", which is not writable.");
+						return Promise.reject(new Error("Attempting to write to unwritable field " + pkey + "."));
+					} else {
+						// console.log("Attempting to write to an unwritable field.");
+						return Promise.resolve(-1);
+					}
+				} else if ((('administrator_only' in sfields[pkey] && sfields[pkey].administrator_only == 1) ||
+						('administrator_only' in overrides && overrides.administrator_only == 1)) &&
+						target_user != null &&
+						(operation == 'patch' ||
+						(operation == 'update' && (original == null || !(pkey in original) || data[pkey] != original[pkey])) ||
+						(operation == 'create' && (!('default' in sfields[pkey]) || data[pkey] != sfields[pkey].default_value)))) {
+					// Unwritable field for non-administrators.
+					extraChecks.push(
+						security.userIsAdministrator(target_user).then(
+							function (is_administrator) {
+								if (!(is_administrator)) {
+									if (dramatic) {
+										return Promise.reject(new Error("Attempting to write to administrator-only field" + pkey + "."));
+									} else {
+										// console.log("Attempting to write to an unwritable field.");
+										return Promise.resolve(-1);
+									}
+								}
+							}, function (err) { return Promise.reject(err); }
+						)
+					);
+				} else if ((('immutable' in sfields[pkey] && sfields[pkey].immutable == 1) ||
+						('immutable' in overrides && overrides.immutable == 1)) &&
+						// target_user != null &&
+						((operation == 'patch' && original && pkey in original && original[pkey] != null) ||
+						(operation == 'update' && original && pkey in original && original[pkey] != null))) {
+					// Immutable field.
+					return Promise.reject(new Error("Attempting to change an immutable field " + pkey + "."));
+				} else if (('computed' in sfields[pkey] && sfields[pkey].computed == 1) ||
+						('computed' in overrides && overrides.computed == 0)) {
+					// Unwritable field.
+					if (dramatic) {
+						return Promise.reject(new Error("Attempting to write to computed (virtual) field " + pkey + "."));
+					} else {
+						// console.log("Attempting to write to a computed (virtual) field.");
+						return Promise.resolve(-1);
+					}
+				} else if (('label' in sfields[pkey] && sfields[pkey].label == 1) ||
+						('label' in overrides && overrides.label == 0)) {
+					// Unwritable field.
+					if (dramatic) {
+						return Promise.reject(new Error("Attempting to write to label field " + pkey + "."));
+					} else {
+						// console.log("Attempting to write to a computed (virtual) field.");
+						return Promise.resolve(-1);
+					}
+				} else if ('submodel' in sfields[pkey] || 'submodel_inline' in sfields[pkey]) {
+					var subschema = {};
+					if ('submodel_inline' in sfields[pkey]) {
+						subschema = sfields[pkey].submodel_inline;
+					} else if ('submodel' in sfields[pkey]) {
+						if (sfields[pkey].submodel in security.models) {
+							subschema = security.models[sfields[pkey].submodel];
+						} else {
+							if (dramatic) {
+								return Promise.reject(new Error("Bad model reference."));
+							} else {
+								console.log("Bad model reference.");
+								return Promise.resolve(-1);
+							}
+						}
+					}
+					// Note that submodel and target_class are incompatible options for obvious reasons.
+					if ('fields' in subschema) {
+						var nest_overrides = {};
+						var ttt;
+						// Copy the overrides.
+						for (ttt in overrides) { nest_overrides[ttt] = overrides[ttt]; }
+						// If there is no override for is_user_writable, use the value specified in the sfields.
+						if (!('is_user_writable' in overrides) && ('is_user_writable' in sfields[pkey])) {
+							nest_overrides['is_user_writable'] = sfields[pkey]['is_user_writable'];
+						}
+						if (!('administrator_only' in overrides) && ('administrator_only' in sfields[pkey])) {
+							nest_overrides['administrator_only'] = sfields[pkey]['administrator_only'];
+						}
+						if (!('computed' in overrides) && ('computed' in sfields[pkey])) {
+							nest_overrides['computed'] = sfields[pkey]['computed'];
+						}
+						if (!('label' in overrides) && ('label' in sfields[pkey])) {
+							nest_overrides['label'] = sfields[pkey]['label'];
+						}
+						if (!('overlay' in overrides) && ('overlay' in sfields[pkey])) {
+							nest_overrides['overlay'] = sfields[pkey]['overlay'];
+						}
+						if (data[pkey] instanceof Object && data[pkey] != null) {
+							extraChecks.push(security.checkTypesNested(subschema, data[pkey], exclusive, connections, target_user, dramatic, operation, ((original != null && pkey in original) ? original[pkey] : null), overlay_only, overrides));
+						}
+					} else {
+						if (dramatic) {
+							return Promise.reject(new Error("The model lacks a field specification."));
+						} else {
+							console.log("The model lacks a field specification.");
+							return Promise.resolve(-1);
+						}
+					}
+				} else if ('target_class' in sfields[pkey]) {
+					// If we are checking authority or references, we chain another promise after the reference check.
+					var tmparray = [pkey];
+					tmparray.forEach(function (currentValue, index, array) {
+						var pkk = currentValue;
+						// console.log(pkk, "has target_class", sfields[pkk]['target_class'], ".");
+						// If the sfields specify target_authority, we check (later) that the target_user (if supplied to this function) can access the pointed record.
+						var check_authority = ('target_authority' in sfields[pkk] && target_user != null && target_user != undefined);
+						// If the sfields specify checking for recursive references via a field, we check that (later).
+						var check_recursion = ('recursive_reference_check' in sfields[pkk] && sfields[pkk]['recursive_reference_check'] > 0);
+						var tname = security.id_name;
+						var refquery = {};
+						refquery[tname] = data[pkk];
+						// console.log("Reference query:", refquery, "."); 
+						extraChecks.push(security.app.service(sfields[pkk]['target_class']).find({query: refquery}).then(function (resfind) {
+							// console.log("Reference check result:", resfind['data'], resfind['data'].length, ".");
+							// console.log("Returning", {kname: pkk, result: ((resfind['data'].length > 0) ? 0 : -1)}, ".");
+							return (('data' in resfind && resfind['data'].length > 0) ? 0 :
+									(dramatic ? Promise.reject(new Error("Missing reference target.")) : -1));
+						}, function(err) { if (dramatic) { return Promise.reject(err); } else { return -1; }}).then(function (fresult) {
+							if (fresult == 0) {
+								var mchecks = [];
+								if (check_authority) {
+									// console.log("Checking authority for user", target_user, "on", sfields[pkk]['target_class'], data[pkk], "according to field", pkk, ".");
+									mchecks.push(security.accessLevelSlowWithUser(target_user, sfields[pkk]['target_class'], data[pkk]).then(function (privlev) {
+										// console.log("Authority:", (((privlev & sfields[pkk]['target_authority']) >= sfields[pkk]['target_authority']) ? 0 : -1));
+										if (!((privlev & sfields[pkk]['target_authority']) >= sfields[pkk]['target_authority'])) {
+											// If the authority is insufficient, check whether the user is an administrator.
+											return (dramatic ? Promise.reject(new Error("Insufficient authority on target record.")) : -1);
+										}
+										return 0;
+									}, function(err) { if (dramatic) { return Promise.reject(err); } else { return -1; } }));
+								}
+								if (check_recursion) {
+									mchecks.push(security.checkRecursiveDocumentDepth(sfields[pkk]['target_class'], data[pkk], pkk, {}, null).then(function (reclev) {
+										// console.log("Depth:", ((reclev >= 0 && reclev < 0xFFFF) ? 0 : -1));
+										return ((reclev >= 0 && reclev < 0xFFFF) ? 0 : (dramatic ? Promise.reject(new Error("References too deep.")) : -1));
+									}, function(err) { if (dramatic) { return Promise.reject(err); } else { return -1; } }));
+								}
+								return Promise.all(mchecks).then(function (checkresults) {
+									var rv = 0;
+									// console.log("Authority and depth for", pkk, ":", checkresults, ".");
+									checkresults.forEach(function (currentValue, index, array) { if (currentValue < 0) rv = -1; });
+									return rv;
+								}, function (err) { return Promise.reject(err); });
+							} else {
+								// console.log("Skipping authority check and returning", fresult);
+								return fresult;
+							}
+						}, function(err) { if (dramatic) { return Promise.reject(err); } else { return -1; } }));
+					});
+				}
+			} else {
+				if (exclusive) {
+					// Undocumented field.
+					if (dramatic) {
+						return Promise.reject(new Error("Attempting to write to undocumented field."));
+					} else {
+						// console.log("Attempting to write to an undocumented field.");
+						return Promise.resolve(-1);
+					}
+				}
+			}
+		}
+		// Now we use the traditional validation (roughly equivalent to the feathers-validator but implemented internally).
+		// This runs on all schema items (including those absent from the input object) so as to be able to check for required values,
+		// except when parsing a patch or when the update is overlay-only and the field is not in the overlay.
+		for (var skey in sfields) {
+			if ('validation' in sfields[skey] && ((operation != 'patch' && !(overlay_only && !(('overlay' in overrides) ? overrides['overlay'] : ('overlay' in sfields[skey] && sfields[skey]['overlay'])))) || skey in data)) {
+				if ((('allownull' in sfields[skey] && sfields[skey]['allownull']) ||
+						('allow_null' in sfields[skey] && sfields[skey]['allow_null'])) &&
+						skey in data && data[skey] == null) {
+					// console.log("Null value allowed.");
+				} else if (security.validateText(sfields[skey]['validation'], ((skey in data) ? data[skey] : null)) < 0) {
+					// console.log("Validation failed on", skey, "on rule", sfields[skey]['validation'], ".");
+					if (dramatic) return Promise.reject(new Error("Validation failed on " + skey + " on rule " + sfields[skey]['validation'] + "."));
+					return Promise.resolve(-1);
+				}
+			}
+		}
+		// Unite all of the outstanding promises and return the AND composite.
+		return Promise.all(extraChecks).then(function (checkresults) {
+			// console.log(checkresults);
+			var rv = 0;
+			checkresults.forEach(function (currentValue, index, array) { if (currentValue < 0) rv = -1; });
+			// console.log("Returning a complete promise.");
+			return Promise.resolve(rv);
+		}, function (err) { return Promise.reject(err); });
+	},
+	checkTypes: function(schema, data, exclusive, connections, target_user, dramatic) {
+		return this.checkTypesNested(schema, data, exclusive, connections, target_user, dramatic, '', null, 0, {});
+	},
 	checkTypesCreate: function(schema, data, exclusive, connections, target_user, dramatic, base_record) {
 		// This allows setting administrator-only values to their defaults.
 		// It ignores base_record.
@@ -1246,15 +649,132 @@ var security_template = {
 		// This accepts a base record and blocks patch entries for administrator-only values.
 		return this.checkTypesNested(schema, data, exclusive, connections, target_user, dramatic, 'patch', base_record, 1, {});
 	},
-	coerceNumericToIntegerPatch: coerceNumericToIntegerPatch,
-	splitPatch: splitPatch,
-	mergePatch: mergePatch,
-	mergeSchemedPatch: mergeSchemedPatch,
-	mergeSchemedPatchInPlace: mergeSchemedPatchInPlace,
-	populateHierarchy: populateHierarchy,
-	splitSubmodelData: splitSubmodelData,
-	flattenHierarchy: flattenHierarchy,
-	mergeSubmodelData: mergeSubmodelData,
+	coerceNumericToIntegerPatch: function(schema, data) {
+		// This converts any text values that ought to be numbers into numbers.
+		var security = this;
+		var output = {};
+		for (var pkey in data) {
+			if (pkey in schema) {
+				if ('type' in schema[pkey] && typeof(data[pkey]) == 'string' && schema[pkey].type == 'number') {
+					var tmp = parseInt(data[pkey]);
+					if (typeof(tmp) == 'number') {
+						output[pkey] = tmp;
+					} else {
+						output[pkey] = null;
+					}
+				} else {
+					output[pkey] = data[pkey];
+				}
+			} else {
+				output[pkey] = data[pkey];
+			}
+		}
+		return output;
+	},
+	splitPatch: function(schema, data) {
+		// This takes a create/patch request and breaks it into base changes and overlay changes.
+		// This runs after the type check.
+		var baseData = {};
+		var overlayData = {};
+		var ci;
+		for (ci in data) {
+			if (ci in schema) {
+				if ('overlay' in schema[ci] && schema[ci].overlay) {
+					overlayData[ci] = data[ci];
+				} else {
+					baseData[ci] = data[ci];
+				}
+			}
+		}
+		return {data, baseData, overlayData};		
+	},
+	mergePatch: function(baseData, overlayData) {
+		// This takes a create/patch request and breaks it into base changes and overlay changes.
+		// This runs after the type check.
+		var data = {};
+		var ci;
+		for (ci in baseData) {
+			data[ci] = baseData[ci];
+		}
+		for (ci in overlayData) {
+			data[ci] = overlayData[ci];
+		}
+		return data;
+	},
+	mergeSchemedPatch: function(schema, baseData, overlayData) {
+		// This takes a create/patch request and breaks it into base changes and overlay changes.
+		// This runs after the type check.
+		var data = {};
+		var ci;
+		for (ci in baseData) {
+			data[ci] = baseData[ci];
+		}
+		for (ci in overlayData) {
+			if (ci in schema) {
+				if ('overlay' in schema[ci] && schema[ci].overlay) {
+					data[ci] = overlayData[ci];
+				}
+			}
+		}
+		return {data, baseData, overlayData};	
+	},
+	mergeSchemedPatchInPlace: function(schema, baseData, overlayData) {
+		// This takes a create/patch request and breaks it into base changes and overlay changes.
+		// This runs after the type check.
+		var data = baseData;
+		var ci;
+		for (ci in overlayData) {
+			if (ci in schema) {
+				if ('overlay' in schema[ci] && schema[ci].overlay) {
+					data[ci] = overlayData[ci];
+				}
+			}
+		}
+		return baseData;		
+	},
+	populateHierarchy: function(base, path, value) {
+		if (path.length <= 0) {
+		} else if (path.length == 1) {
+			base[path[0]] = value;
+		} else {
+			if (!(path[0] in base)) base[path[0]] = {};
+			this.populateHierarchy(base[path[0]], path.slice(1), value);
+		}
+		return 0;
+	},
+	splitSubmodelData: function(schema, data) {
+		// This takes an object containing flattened data and extracts fields into subobjects according to the model.
+		// This runs before the type check.
+		var security = this;
+		var fieldMap = security.splitSubmodel(schema, '_').fields;
+		var output = {};
+		var ci;
+		for (ci in data) {
+			if (ci in fieldMap) {
+				security.populateHierarchy(output, fieldMap[ci], data[ci]);
+			}
+		}
+		return output;
+	},
+	flattenHierarchy: function(dest, prefix, delimiter, current) {
+		if (current == null) {
+		} else if (current instanceof Object) {
+			var tc;
+			for (tc in current) {
+				this.flattenHierarchy(dest, (prefix ? prefix + delimiter + tc : tc), delimiter, current[tc]);
+			}
+		} else if (prefix) {
+			dest[prefix] = current;
+		}
+		return 0;
+	},
+	mergeSubmodelData: function(schema, data) {
+		// This takes an object containing data according to the provided model and flattens the contents of subobjects into the top-level dictionary.
+		// The operation presupposes non-conflicting names.
+		var output = {};
+		this.flattenHierarchy(output, null, '_', data);
+		return output;
+	},
 	mergeSubmodelDataHook: function(target_class, hook) {
 		// This is for use as an after hook for get requests.
 		if ('flatForm' in hook.params && hook.params.flatForm) {
@@ -1263,18 +783,421 @@ var security_template = {
 		}
 		return Promise.resolve(hook);
 	},
-	splitSubmodelResultHook: convertSubmodelFlattenByMap,
-	inlineSchema: inlineSchema,
-	defaultValueDataFromSchema: defaultValueDataFromSchema,
-	dictDiff: dictDiff,
-	schemaGetQuantitativeNames: schemaGetQuantitativeNames,
-	vectorTallyWithSchemaArrays: vectorTallyWithSchemaArrays,
-	vectorAverageWithSchemaByName: vectorAverageWithSchemaByName,
-	padZero: padZero,
-	generateFormCrude: generateFormCrude,
-	numberCheck: numberCheck,
-	extractFormData: extractFormData,
-	filterFormData: filterFormData,
+	splitSubmodelResultHook: function(target_class, hook) {
+		// This is for use as a before hook for create and update requests.
+		if ('flatForm' in hook.params && hook.params.flatForm) {
+			var tmp = splitSubmodelData(hook.app.security.data_schema[target_class], hook.result);
+			hook.result = tmp;
+		}
+	},
+	splitSubmodel: function(schema, delimiter) {
+		// This generates flat names for nested entities and maps them to nested entity paths.
+		// Like {'address_street_address': ['address', 'street_address']}.
+		// This takes just the field map for schema, not the full schema structure.
+		var security = this;
+		var output = {};
+		var si;
+		if ('fields' in schema) {
+			for (si in schema.fields) {
+				if ('submodel' in schema.fields[si] || 'submodel_inline' in schema.fields[si]) {
+					var tschema = {};
+					if ('submodel_inline' in schema.fields[si] && 'fields' in schema.fields[si].submodel_inline) {
+						tschema = security.splitSubmodel(schema.fields[si]['submodel_inline'], delimiter);
+					} else if ('submodel' in schema.fields[si] && 'fields' in security.models[schema.fields[si].submodel]) {
+						tschema = security.splitSubmodel(security.models[schema.fields[si].submodel], delimiter);
+					}
+					var tsi;
+					for (tsi in tschema.fields) {
+						// Construct the flat name by joining the incoming name to the name of the current key.
+						// And construct the path by joining the incoming array to an array containing the name of the current key.
+						if ((si + delimiter + tsi) in output) console.log("Schema conflict.");
+						else output[si + delimiter + tsi] = ([si]).concat(tschema.fields[tsi]);
+					}
+				} else {
+					if (si in output) console.log("Schema conflict.");
+					else output[si] = [si];
+				}
+			}
+		}
+		return {fields: output};
+	},
+	convertSubmodelFlattenByMap: function(schema, mapping) {
+		// This takes an inlined schema only.
+		// This takes the output from splitSubmodel as mapping.
+		// TODO: Rebase column names in easyCompute properties.
+		var output = {fields: {}};
+		var entry;
+		for (entry in mapping.fields) {
+			var current_node = {'submodel_inline': schema};
+			var current_node_name;
+			var err = 0;
+			mapping.fields[entry].forEach(function (current_node_name, mei, mea) {
+				if ('submodel_inline' in current_node &&
+						'fields' in current_node['submodel_inline'] &&
+						current_node_name in current_node['submodel_inline']['fields']) {
+					current_node = current_node['submodel_inline']['fields'][current_node_name];
+				} else {
+					err = 1;
+				}
+			});
+			if (!err) output.fields[entry] = current_node;
+		}
+		return output;
+	},
+	inlineSchema: function(schema) {
+		// This inlines submodel references.
+		// It copies other field data but discards rules since they are only useful server-side.
+		var security = this;
+		var output = {};
+		output.fields = {};
+		var fname;
+		for (fname in schema.fields) {
+			output.fields[fname] = {};
+			var pname;
+			for (pname in schema.fields[fname]) {
+				// There are special rules for submodels, but we copy everything else.
+				if (pname == 'submodel') {
+					if (!('submodel_inline' in schema.fields[fname])) {
+						output.fields[fname]['submodel_inline'] = security.inlineSchema(security.models[schema.fields[fname].submodel]);
+						// console.log("Inlining " + schema.fields[fname].submodel + ".");
+					}
+				} else if (pname == 'submodel_inline') {
+					output.fields[fname]['submodel_inline'] = security.inlineSchema(schema.fields[fname].submodel_inline);
+				} else {
+					output.fields[fname][pname] = schema.fields[fname][pname];
+				}
+			}
+		}
+		return output;
+	},
+	defaultValueDataFromSchema: function(schema, optionals) {
+		// This generates a record containing default or space-filler values.
+		// If there are no relations and no strings that must be longer than zero characters,
+		// it might give a record that would pass the type check.
+		var security = this;
+		var output = {};
+		var si;
+		for (si in schema.fields) {
+			if ('submodel' in schema.fields[si]) {
+					output[si] = security.defaultValueDataFromSchema(security.models[schema.fields[si].submodel], optionals);
+			} else if ('submodel_inline' in schema.fields[si]) {
+					output[si] = security.defaultValueDataFromSchema(schema[si].submodel_inline, 1);
+			} else if ('type' in schema.fields[si] &&
+					(!('is_primary_key' in schema.fields[si] && schema.fields[si].is_primary_key)) &&
+					(!('target_class' in schema.fields[si] && schema.fields[si].target_class.length > 0)) &&
+					(!('is_user_writable' in schema.fields[si] && !(schema.fields[si].is_user_writable))) &&
+					(!('computed' in schema.fields[si] && schema.fields[si].computed))) {
+				// We need to figure out the rules for the data to be generated.
+				var vmin = 0;
+				var vmax = 0;
+				var vrequired = 0;
+				var vrules = [];
+				if ('validation' in schema.fields[si]) vrules = security.tokenizeValidationRule(schema.fields[si].validation);
+				vrules.forEach(function (rule, r_ind, r_arr) {
+					if (rule.length > 1) {
+						if (rule[0] == 'min') {
+							vmin = parseInt(rule[1]);
+						} else if (rule[0] == 'max') {
+							vmax = parseInt(rule[1]);
+						}
+					} else if (rule.length > 0) {
+						if (rule[0] == 'required') {
+							vrequired = 1;
+						}
+					}
+				});
+				// Now we generate data according to those rules.
+				if (vrequired || optionals) {
+					if (schema.fields[si].type == 'string') {
+						var scnt = 0;
+						var sspace = "";
+						while (scnt < vmin) {
+							sspace += (scnt % 10).toString();
+							scnt++;
+						}
+						output[si] = sspace;
+					} else if (schema.fields[si].type == 'number') {
+						output[si] = vmin;
+					}
+				}
+			}
+		}
+		return output;
+	},
+	dictDiff: function(i0, i1, proportional) {
+		var output = {};
+		for (fn in i0) {
+			if (fn in i1) {
+				if (proportional) {
+					if (i0[fn] > 0) {
+						output[fn] = (i1[fn] - i0[fn]) / i0[fn];
+					} else {
+						output[fn] = NaN;
+					}
+				} else {
+					output[fn] = (i1[fn] - i0[fn]);
+				}
+			}
+		}
+		return output;
+	},
+	schemaGetQuantitativeNames: function(schema, inferQuantityFields, ignoreComputedFields) {
+		var names = [];
+		var fname;
+		for (fname in schema.fields) {
+			var field = schema.fields[fname];
+			if ('type' in field && field.type == 'number' &&
+					(('quantitative' in field && field.quantitative) ||
+					(inferQuantityFields &&
+					!('is_primary_key' in field && field.is_primary_key) &&
+					!('target_class' in field && field.target_class))) &&
+					!('label' in field && field.label) &&
+					!(ignoreComputedFields && 'computed' in field && field.computed)) {
+				names.push(fname);
+			}
+		};
+		return names;
+	},
+	vectorTallyWithSchemaArrays: function(schema, data, names, invertFirst) {
+		// This expects flat schema (with no submodels).
+		// Data is an array of records.
+		// invertFirst reverses the sign of the first row, allowing this function to be used for differencing.
+		// Make space for the total and the count of the input values for each column.
+		var value_totals = new Array(names.length);
+		value_totals.fill(0);
+		var item_totals = new Array(names.length);
+		item_totals.fill(0);
+		// Add the value to the one vector and increment the value count in the other.
+		// TODO: Consider using parallel.js here.
+		data.forEach(function (row, r_ind, r_arr) {
+			names.forEach(function (n, n_ind, n_arr) {
+				if (n in row && typeof(row[n]) == 'number') {
+					if (invertFirst && r_ind == 0) value_totals[n_ind] -= row[n];
+					else value_totals[n_ind] += row[n];
+					item_totals[n_ind] += 1;
+				}
+			});
+		});
+		return {names: names, totals: value_totals, counts: item_totals};
+	},
+	vectorAverageWithSchemaByName: function(schema, data, names) {
+		// console.log("Names.");
+		// console.log(names);
+		var iv = this.vectorTallyWithSchemaArrays(schema, data, names, 0);
+		// console.log("Values.");
+		// console.log(iv);
+		// var output_a = new Array(iv.names.length);
+		var output_d = {};
+		iv.names.forEach( function (n, ind, n_arr) {
+			if (iv.counts[ind] > 0) {
+				// output_a[ind] = iv.totals[ind] / iv.counts[ind];
+				output_d[n] = iv.totals[ind] / iv.counts[ind];
+			} else {
+				// output_a[ind] = null;
+				output_d[n] = null;
+			}
+		});
+		return output_d;
+	},
+	padZero: function(val, padsize) {
+		var tv = val.toString();
+		var zcount = padsize - tv.length;
+		var tp = "";
+		var ocount = 0;
+		while (ocount < zcount) {
+			tp += "0";
+			ocount++;
+		}
+		return tp + tv;
+	},
+	generateFormCrude: function(document, ischema, includeAll, includeVisible, includeLabelled, preferExplanations, breaks) {
+		var security = this;
+		var fschema_map = this.splitSubmodel(ischema, "_");
+		var fschema = this.convertSubmodelFlattenByMap(ischema, fschema_map);
+		var output = [];
+		var fl = fschema.fields;
+		var fname;
+		for (fname in fl) {
+			var fe = fl[fname];
+			if ((includeLabelled  &&
+					(('human_name' in fe && fe['human_name']) ||
+					('special_explanation' in fe && fe['human_name']) ||
+					('label' in fe && fe['label']))) ||
+					(includeVisible && 'visible' in fe && fe['visible']) ||
+					includeAll) {
+				// We determine that this field somehow qualifies to appear on the form.
+				var tl = null;
+				if ('label' in fe && fe['label']) {
+					// If this is just a stand-alone label, it is a p tag.
+					if ('form_tag' in fe && fe['form_tag'])
+						tl = document.createElement(fe['form_tag']);
+					else
+						tl = document.createElement("p");
+					tl.setAttribute("name", fname);
+				} else {
+					// If we are putting a label on an input field, it is a label tag.
+					tl = document.createElement("label");
+				}
+				if (preferExplanations && 'special_explanation' in fe &&
+						fe['special_explanation']) {
+					var tt = document.createTextNode(fe['special_explanation']);
+					tl.appendChild(tt);
+				} else if ('human_name' in fe && fe['human_name']) {
+					var tt = document.createTextNode(fe['human_name']);
+					tl.appendChild(tt);
+				}
+				if (breaks) {
+					var tb = document.createElement("br");
+					tl.appendChild(tb);
+				}
+				if (!('label' in fe && fe['label'])) {
+					if ('type' in fe && fe['type']) {
+						// Parse the validation rules, if present.
+						var tmin = null;
+						var tmax = null;
+						var treq = null;
+						var tstep = null;
+						var twrite = null;
+						var tcomputed = null;
+						if ('validation' in fe) {
+							var rules = security.tokenizeValidationRule(fe['validation']);
+							rules.forEach(function(rval, r_ind, r_arr) {
+								if (rval.length > 1) {
+									if (rval[0] == 'min') {
+										tmin = rval[1];
+									} else if (rval[0] == 'max') {
+										tmax = rval[1];
+									} else if (rval[0] == 'step') {
+										tstep = rval[1];
+									}
+								} else if (rval.length > 0) {
+									if (rval[0] == 'required') {
+										treq = 1;
+									}
+								}
+							});
+						}
+						if ('computed' in fe) {
+							if (fe['computed']) {
+								tcomputed = 1;
+							} else {
+								tcomputed = 0;
+							}
+						}
+						if ('is_user_writable' in fe) {
+							if (fe['is_user_writable']) {
+								twrite = 1;
+							} else {
+								twrite = 0;
+							}
+						}
+						var tf = null;
+						if (fe['type'] == 'object') {
+							// We only accept dates right now.
+							if ('stype' in fe && fe['stype'] == 'date') {
+								// Insert a date selector.
+								tf = document.createElement("input");
+								tf.setAttribute("type", "date");
+							}
+						} else if (fe['type'] == 'number') {
+							tf = document.createElement("input");
+							tf.setAttribute("type", "number");
+							if (tmin != null)
+								tf.setAttribute("min", tmin.toString());
+							if (tmax != null)
+								tf.setAttribute("max", tmax.toString());
+							if (tstep != null)
+								tf.setAttribute("step", tstep.toString());
+						} else if (fe['type'] == 'string') {
+							tf = document.createElement("input");
+							tf.setAttribute("type", "number");
+							if (tmin != null)
+								tf.setAttribute("min", tmin.toString());
+							if (tmax != null)
+								tf.setAttribute("max", tmax.toString());
+						}
+						if (tf != null) {
+							if (treq) tf.setAttribute("required", 1);
+							tf.setAttribute("name", fname);
+							if ((twrite != null && !twrite) ||
+									(tcomputed != null && tcomputed)) {
+								tf.setAttribute("readonly", "1");
+							}
+							tl.appendChild(tf);
+							if (breaks) {
+								var tb = document.createElement("br");
+								tl.appendChild(tb);
+							}
+						}
+					}
+				}
+				output.push(tl);
+			}
+		}
+		return output;
+	},
+	numberCheck(str) {
+		if (typeof(str) == 'number') return 1;
+		if (str !== null && str.length > 0 && !isNaN(str))
+			return 1;
+		return 0;
+	},
+	extractFormData: function(schema, fschema, tform) {
+		// This requires flattened schema and normal schema.
+		// The caching improves performance.
+		var security = this;
+		var tfs = fschema.fields;
+		var fname;
+		var tdata = {};
+		for (fname in tfs) {
+			var tf = tfs[fname];
+			if (!('label' in tf && tf['label']) && !('computed' in tf && tf['computed']) &&
+					!('is_user_writable' in tf && !tf['is_user_writable'])) {
+				if (fname in tform.elements && 'value' in tform.elements[fname]) {
+					var tv = tform.elements[fname].value;
+					var tvc = tv;
+					// console.log(tf);
+					if ('type' in tf) {
+						if (tf.type == 'number' && typeof(tv) != 'number') {
+							if (security.numberCheck(tv))
+								tvc = new Number(tv);
+							else
+								tvc = null;
+						}
+					}
+					if (tvc != null)
+						tdata[fname] = tvc;
+				}
+			}
+		}
+		return security.splitSubmodelData(schema, tdata);
+	},
+	filterFormData: function(schema, data) {
+		// This filters out unwritable fields.
+		if (data == null) return null;
+		var security = this;
+		var tfs = schema.fields;
+		var fname;
+		var tdata = {};
+		for (fname in tfs) {
+			var tf = tfs[fname];
+			if (!('label' in tf && tf['label']) && !('computed' in tf && tf['computed']) &&
+					!('is_user_writable' in tf && !tf['is_user_writable'])) {
+				if (fname in data) {
+					if ('submodel' in tf && tf['submodel'] != null) {
+						if (tf['submodel'] in security.models) {
+							tdata[fname] = security.filterFormData(security.models[tf['submodel']], data[fname]);
+						}
+					} else if ('submodel_inline' in tf && tf['submodel_inline'] != null) {
+						tdata[fname] = security.filterFormData(security.models[tf['submodel']], data[fname]);
+					} else {
+						tdata[fname] = data[fname];
+					}
+				}
+			}
+		}
+		return tdata;
+	},
 	vectorAverageWithSchema: function(schema, data, inferQuantityFields, ignoreComputedFields) {
 		// If inferQuantityFields is set, this will use any field typed as a number and not used as a direct or referenced primary key as a quantitative value.
 		var ischema = this.inlineSchema(schema);
@@ -1289,7 +1212,21 @@ var security_template = {
 		var averages = this.vectorAverageWithSchemaByName(fschema, fdata, names);
 		return this.splitSubmodelData(schema, averages);
 	},
-	vectorDifferenceWithSchemaByName: vectorDifferenceWithSchemaByName,
+	vectorDifferenceWithSchemaByName: function(schema, data, names) {
+		var iv = this.vectorTallyWithSchemaArrays(schema, data, names, 1);
+		// var output_a = new Array(iv.names.length);
+		var output_d = {};
+		iv.names.forEach( function (n, ind, n_arr) {
+			if (iv.counts[ind] > 0) {
+				// output_a[ind] = iv.totals[ind] / iv.counts[ind];
+				output_d[n] = iv.totals[ind];
+			} else {
+				// output_a[ind] = null;
+				output_d[n] = null;
+			}
+		});
+		return output_d;
+	},
 	vectorDifferenceWithSchema: function(schema, data, inferQuantityFields, ignoreComputedFields) {
 		// If inferQuantityFields is set, this will use any field typed as a number and not used as a direct or referenced primary key as a quantitative value.
 		var ischema = this.inlineSchema(schema);
@@ -1304,10 +1241,134 @@ var security_template = {
 		var differences = this.vectorDifferenceWithSchemaByName(fschema, fdata, names);
 		return this.splitSubmodelData(schema, differences);
 	},
-	easyCompute: easyCompute,
-	coerceValues: coerceValues,
-	includeEasyComputedValues: includeEasyComputedValues,
-	generateValidatorSchema: generateValidatorSchema,
+	easyCompute: function(schema, data, formula, allow_recursion, fallback_data) {
+		// TODO: Figure out errors.
+		var security = this;
+		if ('value' in formula) {
+			return formula['value'];
+		} else if ('column' in formula) {
+			// TODO: Add support for relative paths to submodels and supermodels.
+			if (formula['column'] in data) {
+				return data[formula['column']];
+			} else if (fallback_data && formula['column'] in fallback_data) {
+				return fallback_data[formula['column']];
+			} else if (allow_recursion && 'fields' in schema && formula['column'] in schema.fields &&
+					'computed' in schema.fields[formula['column']] &&
+					schema.fields[formula['column']]['computed'] &&
+					'easy_computation' in schema.fields[formula['column']] &&
+					schema.fields[formula['column']]['easy_computation'] != null) {
+				return security.easyCompute(schema, data, schema.fields[formula['column']]['easy_computation'], allow_recursion, fallback_data);
+			} else if ('fields' in schema && formula['column'] in schema.fields) {
+				// It is not a bad reference, just a missing field.
+			} else {
+				console.log("Bad reference " + formula['column'] + " in formula.");
+			}
+		} else if ('sum' in formula) {
+			var acc = 0;
+			formula['sum'].forEach(function (addend, a_ind, a_arr) {
+				acc += security.easyCompute(schema, data, addend, allow_recursion, fallback_data);
+			});
+			return acc;
+		} else if ('product' in formula) {
+			var acc = 1;
+			formula['product'].forEach(function (addend, a_ind, a_arr) {
+				acc *= security.easyCompute(schema, data, addend, allow_recursion, fallback_data);
+			});
+			return acc;
+		} else if ('pow' in formula) {
+			var pbase = security.easyCompute(schema, data, formula['pow'][0], allow_recursion, fallback_data);
+			var pexp = security.easyCompute(schema, data, formula['pow'][1], allow_recursion, fallback_data);
+			if (formula['pow'].length > 1 && (pexp >= 0 || pbase > 0)) {
+				return Math.pow(pbase, pexp);
+			}
+		}
+		return 0;
+	},
+	coerceValues: function (schema, data) {
+		var security = this;
+		var fname;
+		var output = {};
+		for (fname in schema.fields) {
+			var field = schema.fields[fname];
+			if (fname in data) {
+				if (data[fname] != null) {
+					if ('type' in field && (typeof(data[fname]) != field['type'] ||
+							('instanceof' in field && field['instanceof'] != null && !(data[fname] instanceof field['instanceof'])))) {
+						if ('instanceof' in field && field['instanceof'] != null) {
+							// console.log("instanceof conversion on " + fname + ".");
+							try {
+								output[fname] = new field['instanceof'](data[fname]);
+							} catch (err) {
+								console.log(err);
+								output[fname] = null;
+							}
+						} else {
+							// console.log("Flat type conversion on " + fname + ".");
+							try {
+								if (field['type'] == 'number') {
+									output[fname] = new Number(data[fname]);
+								} else if (field['type'] == 'string') {
+									output[fname] = new String(data[fname]);
+								} else {
+									output[fname] = null;
+								}
+							} catch (err) {
+								output[fname] = null;
+							}
+						}
+					} else {
+						// If the field is provided, we copy/process it.
+						// console.log("Type match on " + fname + ".");
+						if ('submodel' in field && typeof(field['submodel']) == 'string' && field['submodel'].length > 0 &&
+								field['submodel'] in security.models) {
+							output[fname] = security.coerceValues(security.models[field['submodel']], data[fname]);
+						} else if ('submodel_inline' in field && field['submodel_inline'] instanceof Object) {
+							output[fname] = security.coerceValues(field['submodel_inline'], data[fname]);
+						} else {
+							output[fname] = data[fname];
+						}
+					}
+				} else {
+					// console.log("Null on " + fname + ".");
+					output[fname] = data[fname];
+				}
+			}
+		}
+		return output;		
+	},
+	includeEasyComputedValues: function(schema, data) {
+		var security = this;
+		var fname;
+		var output = {};
+		for (fname in schema.fields) {
+			var field = schema.fields[fname];
+			if ('type' in field && field.type == 'number' &&
+					'computed' in field && field.computed &&
+					'easy_computation' in field) {
+				// If the field is computed, we generate it.
+				output[fname] = security.easyCompute(schema, data, field['easy_computation'], 1, output);
+			} else if (fname in data) {
+				// If the field is provided, we copy/process it.
+				if ('submodel' in field && typeof(field['submodel']) == 'string' && field['submodel'].length > 0 &&
+						field['submodel'] in security.models) {
+					output[fname] = security.includeEasyComputedValues(security.models[field['submodel']], data[fname]);
+				} else if ('submodel_inline' in field && field['submodel_inline'] instanceof Object) {
+					output[fname] = security.includeEasyComputedValues(field['submodel_inline'], data[fname]);
+				} else {
+					output[fname] = data[fname];
+				}
+			}
+		};
+		return output;
+	},
+	generateValidatorSchema: function(schema) {
+		// This converts the internal validator schema/rules to something compatible with feathers-validator.
+		var rv = {};
+		for (var tkey in schema) {
+			rv[tkey] = schema[tkey].validation;
+		}
+		return rv;
+	},
 	checkAuthorityEntry: function(data, target_user, dramatic) {
 		var target_class = null;
 		if ('target_class' in data && this.validateText('max:255|alpha_dash', data['target_class']) >= 0 &&
@@ -2765,36 +2826,297 @@ function reprivilegerCreate(app) {
 	return rv;
 }
 
-exports = module.exports = {create: reprivilegerCreate, createTestApp: reprivilegerCreateTestApp, testTestApp: reprivilegerTestTestApp, hookDoWithReadLock: hookDoWithReadLock, hookDoWithWriteLock: hookDoWithWriteLock, doWithReadLock: doPromiseWithReadLock, doWithWriteLock: doPromiseWithWriteLock, doPromiseWithLock: doPromiseWithLock, hookLockRead: hookLockRead, hookLockWrite: hookLockWrite, hookUnlock: hookUnlock, errorPasser: errorPasser, hookCompositor: hookCompositor, hookErrUnlock: hookErrUnlock, escapeRegExp: escapeRegExp, convertQueryStringSubstring: convertQueryStringSubstring, convertQuerySubstringRegExp: convertQuerySubstringRegExp, convertQueryBlankStringDrop: convertQueryBlankStringDrop, hookQueryStringSubstring: hookQueryStringSubstring, hookQuerySubstringRegExp: hookQuerySubstringRegExp, queryDropSpecial: queryDropSpecial,
-	tokenizeValidationRule: tokenizeValidationRule,
-	validateText: validateText,
-	checkTypesNested: checkTypesNested,
-	checkTypes: checkTypes,
-	coerceNumericToIntegerPatch: coerceNumericToIntegerPatch,
-	splitPatch: splitPatch,
-	mergePatch: mergePatch,
-	mergeSchemedPatch: mergeSchemedPatch,
-	mergeSchemedPatchInPlace: mergeSchemedPatchInPlace,
-	populateHierarchy: populateHierarchy,
-	splitSubmodelData: splitSubmodelData,
-	flattenHierarchy: flattenHierarchy,
-	mergeSubmodelData: mergeSubmodelData,
-	splitSubmodelResultHook: convertSubmodelFlattenByMap,
-	inlineSchema: inlineSchema,
-	defaultValueDataFromSchema: defaultValueDataFromSchema,
-	dictDiff: dictDiff,
-	schemaGetQuantitativeNames: schemaGetQuantitativeNames,
-	vectorTallyWithSchemaArrays: vectorTallyWithSchemaArrays,
-	vectorAverageWithSchemaByName: vectorAverageWithSchemaByName,
-	padZero: padZero,
-	generateFormCrude: generateFormCrude,
-	numberCheck: numberCheck,
-	extractFormData: extractFormData,
-	filterFormData: filterFormData,
-	vectorDifferenceWithSchemaByName: vectorDifferenceWithSchemaByName,
-	easyCompute: easyCompute,
-	coerceValues: coerceValues,
-	includeEasyComputedValues: includeEasyComputedValues,
-	generateValidatorSchema: generateValidatorSchema
-};
+function reprivilegerCreateTestApp() {
+	var app = express();
+	app.services = {
+		'users': {
+			_data: {
+				'U1': {'_id': 'U1', 'name': 'frank'},
+				'U2': {'_id': 'U2', 'name': 'bob'}
+			},
+			get: function(id) {
+				if (id in this._data) return Promise.resolve(this._data[id]);
+				return Promise.resolve({});
+			},
+			find: function(params) {
+				var query = ('query' in params) ? params.query : {};
+				var rv = [];
+				for (var ent in this._data) {
+					var entm = 1;
+					for (var prop in query) {
+						if (typeof(prop) == 'string' && (typeof(query[prop]) == 'string' || typeof(query[prop]) == 'number' || typeof(query[prop]) == 'date')) {
+							if (prop in this._data[ent] && this._data[ent][prop] == query[prop]) {
+							} else {
+								entm = 0;
+							}
+						}
+					}
+					if (entm == 1) rv.push(this._data[ent]);
+				}
+				return Promise.resolve({total: rv.length, data: rv});
+			}
+		},
+		'organizations': {
+			_data: {
+				'O1': {'_id': 'O1', 'name': 'franksfort'}
+			},
+			get: function(id) {
+				if (id in this._data) return Promise.resolve(this._data[id]);
+				return Promise.resolve({});
+			},
+			find: function(params) {
+				var query = ('query' in params) ? params.query : {};
+				var rv = [];
+				for (var ent in this._data) {
+					var entm = 1;
+					for (var prop in query) {
+						if (typeof(prop) == 'string' && (typeof(query[prop]) == 'string' || typeof(query[prop]) == 'number' || typeof(query[prop]) == 'date')) {
+							if (prop in this._data[ent] && this._data[ent][prop] == query[prop]) {
+							} else {
+								entm = 0;
+							}
+						}
+					}
+					if (entm == 1) rv.push(this._data[ent]);
+				}
+				return Promise.resolve({total: rv.length, data: rv});
+			}
+		},
+		'shops': {
+			_data: {
+				'S1': {'_id': 'S1', 'name': 'downtown', 'organization_id': 'O1'},
+				'S2': {'_id': 'S2', 'name': 'grand', 'organization_id': 'O1'}
+			},
+			get: function(id) {
+				if (id in this._data) return Promise.resolve(this._data[id]);
+				return Promise.resolve({});
+			},
+			find: function(params) {
+				var query = ('query' in params) ? params.query : {};
+				var rv = [];
+				for (var ent in this._data) {
+					var entm = 1;
+					for (var prop in query) {
+						if (typeof(prop) == 'string' && (typeof(query[prop]) == 'string' || typeof(query[prop]) == 'number' || typeof(query[prop]) == 'date')) {
+							if (prop in this._data[ent] && this._data[ent][prop] == query[prop]) {
+							} else {
+								entm = 0;
+							}
+						}
+					}
+					if (entm == 1) rv.push(this._data[ent]);
+				}
+				return Promise.resolve({total: rv.length, data: rv});
+			}
+		},
+		'sales': {
+			_data: {
+				'L1': {'_id': 'L1', 'shop_id': 'S1'},
+				'L2': {'_id': 'L2', 'shop_id': 'S2'},
+				'L3': {'_id': 'L3', 'shop_id': 'S2'}
+			},
+			get: function(id) {
+				if (id in this._data) return Promise.resolve(this._data[id]);
+				return Promise.resolve({});
+			},
+			find: function(params) {
+				var query = ('query' in params) ? params.query : {};
+				var rv = [];
+				for (var ent in this._data) {
+					var entm = 1;
+					for (var prop in query) {
+						if (typeof(prop) == 'string' && (typeof(query[prop]) == 'string' || typeof(query[prop]) == 'number' || typeof(query[prop]) == 'date')) {
+							if (prop in this._data[ent] && this._data[ent][prop] == query[prop]) {
+							} else {
+								entm = 0;
+							}
+						}
+					}
+					if (entm == 1) rv.push(this._data[ent]);
+				}
+				return Promise.resolve({total: rv.length, data: rv});
+			}
+		},
+		'saledocuments': {
+			_data: {
+				'D1': {'_id': 'D1', 'sale_id': 'L1'},
+				'D2': {'_id': 'D2', 'sale_id': 'L2'},
+				'D3': {'_id': 'D3', 'sale_id': 'L3'},
+				'D4': {'_id': 'D4', 'sale_id': 'L3', 'base_id': 'D3'},
+				'D5': {'_id': 'D5', 'sale_id': 'L3', 'base_id': 'D4'}
+			},
+			get: function(id) {
+				if (id in this._data) return Promise.resolve(this._data[id]);
+				return Promise.resolve({});
+			},
+			find: function(params) {
+				var query = ('query' in params) ? params.query : {};
+				var rv = [];
+				for (var ent in this._data) {
+					var entm = 1;
+					for (var prop in query) {
+						if (typeof(prop) == 'string' && (typeof(query[prop]) == 'string' || typeof(query[prop]) == 'number' || typeof(query[prop]) == 'date')) {
+							if (prop in this._data[ent] && this._data[ent][prop] == query[prop]) {
+							} else {
+								entm = 0;
+							}
+						}
+					}
+					if (entm == 1) rv.push(this._data[ent]);
+				}
+				return Promise.resolve({total: rv.length, data: rv});
+			}
+		},
+		'authorities': {
+			_data: {
+				'A1': {'_id': 'D1', 'user_id': 'U1', 'target_class': 'organizations', 'target_id': 'O1', 'privilege': 14},
+				'A2': {'_id': 'D2', 'user_id': 'U2', 'target_class': 'shops', 'target_id': 'S2', 'privilege': 6}
+			},
+			get: function(id) {
+				if (id in this._data) return Promise.resolve(this._data[id]);
+				return Promise.resolve({});
+			},
+			find: function(params) {
+				var query = ('query' in params) ? params.query : {};
+				var rv = [];
+				for (var ent in this._data) {
+					var entm = 1;
+					for (var prop in query) {
+						if (typeof(prop) == 'string' && (typeof(query[prop]) == 'string' || typeof(query[prop]) == 'number' || typeof(query[prop]) == 'date')) {
+							if (prop in this._data[ent] && this._data[ent][prop] == query[prop]) {
+							} else {
+								entm = 0;
+							}
+						}
+					}
+					if (entm == 1) rv.push(this._data[ent]);
+				}
+				return Promise.resolve({total: rv.length, data: rv});
+			}
+		}
+	}
+	app.service = function(fname) {
+		return app.services[fname];
+	}
+	app.security = this.create(app);
+	app.security.data_schema = {
+		'saledocuments': {
+			fields: {
+				_id: {type: 'string', validation: 'max:255|alpha_dash', is_primary_key: 1, is_user_writable: 0},
+				sale_id: {type: 'string', validation: 'max:255|alpha_dash', is_user_writable: 1, target_class: 'sales', target_authority: 6},
+				base_id: {type: 'string', validation: 'max:255|alpha_dash', is_user_writable: 1, target_class: 'saledocuments', target_authority: 2, recursive_reference_check: 1},
+				image_id: {type: 'string', validation: 'max:255|alpha_dash', is_user_writable: 1},
+				plain_text: {type: 'string', validation: 'max:65535', is_user_writable: 1},
+				print_data: {type: 'string', validation: 'max:65535', is_user_writable: 1},
+				created_at: {type: 'date', validation: '', is_user_writable: 0},
+				created_by: {type: 'date', validation: '', is_user_writable: 0}
+			}
+		},
+		'sales': {
+			fields: {
+				_id: {type: 'string', validation: 'max:255|alpha_dash', is_primary_key: 1, is_user_writable: 0},
+				shop_id: {type: 'string', validation: 'max:255|alpha_dash', is_user_writable: 1, target_class: 'shops', target_authority: 6},
+				user_id: {type: 'string', validation: 'max:255|alpha_dash', is_user_writable: 1, target_class: 'users', target_authority: 2},
+				created_at: {type: 'date', validation: '', is_user_writable: 0},
+				created_by: {type: 'date', validation: '', is_user_writable: 0}
+			}
+		},
+		'shops': {
+			fields: {
+				_id: {type: 'string', validation: 'max:255|alpha_dash', is_primary_key: 1, is_user_writable: 0},
+				organization_id: {type: 'string', validation: 'max:255|alpha_dash', is_user_writable: 1, target_class: 'organizations', target_authority: 6},
+				name: {type: 'string', validation: 'max:255|alpha_dash', is_user_writable: 1},
+				created_at: {type: 'date', validation: '', is_user_writable: 0},
+				created_by: {type: 'date', validation: '', is_user_writable: 0}
+			}
+		},
+		'organizations': {
+			fields: {
+				_id: {type: 'string', validation: 'max:255|alpha_dash', is_primary_key: 1, is_user_writable: 0},
+				name: {type: 'string', validation: 'max:255|alpha_dash', is_user_writable: 1},
+				created_at: {type: 'date', validation: '', is_user_writable: 0},
+				created_by: {type: 'date', validation: '', is_user_writable: 0}
+			}
+		},
+	};
+	app.security.privilege_transit = {'saledocuments': [{key: 'sale_id', 'class': 'sales'}], 'sales': [{key: 'shop_id', 'class': 'shops'}, {key: 'user_id', 'class': 'users'}], 'shops': [{key: 'organization_id', 'class': 'organizations'}]};
+	return app;
+}
+
+function reprivilegerTestTestApp(app) {
+	app.get('/', function (req, res) {
+		app.security.userCanRead('U1', 'organizations', 'O1').then(function(x) {
+			if (x) console.log('Frank can access the organization.');
+		});
+		app.security.userCanRead('U2', 'organizations', 'O1').then(function(x) {
+			if (x) console.log('Bob can access the organization.');
+		});
+		app.security.userCanRead('U1', 'shops', 'S1').then(function(x) {
+			if (x) console.log('Frank can access shop 1.');
+		});
+		app.security.userCanRead('U2', 'shops', 'S1').then(function(x) {
+			if (x) console.log('Bob can access shop 1.');
+		});
+		app.security.userCanRead('U1', 'shops', 'S2').then(function(x) {
+			if (x) console.log('Frank can access shop 2.');
+		});
+		app.security.userCanRead('U2', 'shops', 'S2').then(function(x) {
+			if (x) console.log('Bob can access shop 2.');
+		});
+		app.security.userCanRead('U1', 'sales', 'L1').then(function(x) {
+			if (x) console.log('Frank can access sale 1.');
+		});
+		app.security.userCanRead('U2', 'sales', 'L1').then(function(x) {
+			if (x) console.log('Bob can access sale 1.');
+		});
+		app.security.userCanRead('U1', 'sales', 'L2').then(function(x) {
+			if (x) console.log('Frank can access sale 2.');
+		});
+		app.security.userCanRead('U2', 'sales', 'L2').then(function(x) {
+			if (x) console.log('Bob can access sale 2.');
+		});
+		var ddprc1 = [];
+		ddprc1.push(app.security.checkRecursiveDocumentDepth('saledocuments', 'D1', 'base_id', {}, null).then(function (rv) { return rv; }));
+		ddprc1.push(app.security.checkRecursiveDocumentDepth('saledocuments', 'D2', 'base_id', {}, null).then(function (rv) { return rv; }));
+		ddprc1.push(app.security.checkRecursiveDocumentDepth('saledocuments', 'D3', 'base_id', {}, null).then(function (rv) { return rv; }));
+		ddprc1.push(app.security.checkRecursiveDocumentDepth('saledocuments', 'D4', 'base_id', {}, null).then(function (rv) { return rv; }));
+		ddprc1.push(app.security.checkRecursiveDocumentDepth('saledocuments', 'D5', 'base_id', {}, null).then(function (rv) { return rv; }));
+		Promise.all(ddprc1).then(function (irv) { console.log("Document depths: ", irv, "."); });
+		var newt1 = {sale_id: 'L1', base_id: 'D3', plain_text: 'ABC.'}; // This is okay. But Bob cannot write this one.
+		var newt2 = {sale_id: 'L1', base_id: 'D3', plain_text: 2}; // This is not okay.
+		var newt3 = {sale_id: 'L1', base_id: 'D3', plain_text: 'ABC.', xww: 1}; // This is not okay.
+		var newt4 = {sale_id: 'L1', base_id: 'D3', plain_text: 'ABC.', _id: 1}; // This is not okay.
+		var newt5 = {sale_id: 'L1', base_id: 'D88', plain_text: 'ABC.'}; // This is not okay.
+		var newt6 = {sale_id: 'L88', base_id: 'D3', plain_text: 'ABC.'}; // This is not okay.
+		var validationtprc1 = [];
+		validationtprc1.push(app.security.checkTypesCreate(app.security.data_schema['saledocuments'], newt1, 1, 1, 'U1', 0).then(function (rv) { return rv; }));
+		validationtprc1.push(app.security.checkTypesCreate(app.security.data_schema['saledocuments'], newt1, 1, 1, 'U2', 0).then(function (rv) { return rv; }));
+		validationtprc1.push(app.security.checkTypesCreate(app.security.data_schema['saledocuments'], newt2, 1, 1, 'U1', 0).then(function (rv) { return rv; }));
+		validationtprc1.push(app.security.checkTypesCreate(app.security.data_schema['saledocuments'], newt3, 1, 1, 'U1', 0).then(function (rv) { return rv; }));
+		validationtprc1.push(app.security.checkTypesCreate(app.security.data_schema['saledocuments'], newt4, 1, 1, 'U1', 0).then(function (rv) { return rv; }));
+		validationtprc1.push(app.security.checkTypesCreate(app.security.data_schema['saledocuments'], newt5, 1, 1, 'U1', 0).then(function (rv) { return rv; }));
+		validationtprc1.push(app.security.checkTypesCreate(app.security.data_schema['saledocuments'], newt6, 1, 1, 'U1', 0).then(function (rv) { return rv; }));
+		Promise.all(validationtprc1).then(function (irv) { console.log("Structure validation results: ", irv, "."); });
+		var validation2 = [app.security.validateText("max:4|alpha_dash", "ABCD"), app.security.validateText("max:4|alpha_dash", "ABCDE"), app.security.validateText("max:4|alpha_dash", "ABC!")];
+		console.log("Text validation results: ", validation2, ".");
+		var ttext = "ABCD";
+		console.log("ttext =", ttext, ".", "(ttext[0] == A) =", (ttext[0] == 'A'), ".");
+		var lhook1 = {};
+		hookDoWithWriteLock(lhook1, function () { console.log("The lock is successful. Check authority."); return 1; }).then( function(iv) {
+			if (iv == 1) {
+				console.log("The authority check succeeded. Do things.");
+			}
+			console.log("Unlock.");
+			lhook1.lock.release();
+		});
+		res.send('Hello World!');
+	});
+
+	app.listen(3000, function () {
+	  console.log('Example app listening on port 3000!');
+	  console.log('Visit to test!');
+	});
+}
+
+exports = module.exports = {create: reprivilegerCreate, createTestApp: reprivilegerCreateTestApp, testTestApp: reprivilegerTestTestApp, hookDoWithReadLock: hookDoWithReadLock, hookDoWithWriteLock: hookDoWithWriteLock, doWithReadLock: doPromiseWithReadLock, doWithWriteLock: doPromiseWithWriteLock, doPromiseWithLock: doPromiseWithLock, hookLockRead: hookLockRead, hookLockWrite: hookLockWrite, hookUnlock: hookUnlock, errorPasser: errorPasser, hookCompositor: hookCompositor, hookErrUnlock: hookErrUnlock, escapeRegExp: escapeRegExp, convertQueryStringSubstring: convertQueryStringSubstring, convertQuerySubstringRegExp: convertQuerySubstringRegExp, convertQueryBlankStringDrop: convertQueryBlankStringDrop, hookQueryStringSubstring: hookQueryStringSubstring, hookQuerySubstringRegExp: hookQuerySubstringRegExp, queryDropSpecial: queryDropSpecial, coerceNumericToIntegerPatch: coerceNumericToIntegerPatch, splitPatch: splitPatch, mergePatch: mergePatch, mergeSchemedPatch: mergeSchemedPatch, mergeSchemedPatchInPlace: mergeSchemedPatchInPlace, populateHierarchy: populateHierarchy, splitSubmodelData: splitSubmodelData, flattenHierarchy: flattenHierarchy, mergeSubmodelData: mergeSubmodelData};
 
